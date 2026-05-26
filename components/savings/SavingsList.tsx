@@ -3,19 +3,19 @@
 import { useState } from 'react';
 import type { SavingsEntry } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
-import { formatCurrency, formatDate, daysUntil } from '@/lib/utils';
+import { formatCurrency, formatDate, daysUntil, addMonths } from '@/lib/utils';
 import {
   parseFDMeta, fdMaturityDate,
-  parseChitMeta, chitNextBidDate, calcChitMonthlyPayment, chitMonthsRemaining,
   parseMFMeta,
 } from '@/lib/notesParsers';
+import { elapsedCycles } from '@/lib/chitFundCalc';
 import Badge from '@/components/ui/Badge';
 import EmptyState from '@/components/ui/EmptyState';
 
 interface Props {
   savings: SavingsEntry[];
   onEdit:   (entry: SavingsEntry) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string) => Promise<boolean>;
 }
 
 // ─── Type-specific detail rows ────────────────────────────────────────────────
@@ -45,32 +45,43 @@ function FDDetail({ entry }: { entry: SavingsEntry }) {
 }
 
 function ChitDetail({ entry }: { entry: SavingsEntry }) {
-  const meta = parseChitMeta(entry.notes);
-  if (!meta) return null;
-  const nextBid = chitNextBidDate(entry.startDate, meta);
-  const days    = nextBid ? daysUntil(nextBid) : null;
-  const urgent  = days !== null && days >= 0 && days <= 7;
-  const monthlyPmt = calcChitMonthlyPayment(meta);
-  const remaining  = chitMonthsRemaining(meta);
+  // New-schema chit (has dedicated columns)
+  if (entry.chitMembers && entry.chitFaceValue && entry.chitDurationMonths && entry.chitBidFrequency) {
+    const n    = entry.chitMembers;
+    const fv   = entry.chitFaceValue;
+    const d    = entry.chitDurationMonths;
+    const bf   = entry.chitBidFrequency;
+    const totalCycles = Math.round(d / bf);
+    const elapsed     = elapsedCycles(entry.startDate, bf);
+    const remaining   = Math.max(0, totalCycles - elapsed);
+    const nextBidDate = addMonths(entry.startDate, (elapsed + 1) * bf);
+    const days        = daysUntil(nextBidDate);
+    const urgent      = days >= 0 && days <= 30;
+    const hasWon      = (entry.chitIsForeman ?? false) || entry.chitWonCycle !== null;
+    const bidReceived = entry.chitBidReceived ?? 0;
+    const totalPaid   = entry.amountInvested;
+    const netGain     = hasWon ? bidReceived - totalPaid : null;
+    const gainPct     = netGain !== null && totalPaid > 0
+      ? (netGain / totalPaid) * 100 : null;
 
-  // Status label
-  const status = meta.is_foreman
-    ? '🏦 Foreman ✓'
-    : meta.user_has_taken_bid
-    ? '✅ Bid taken'
-    : '🕐 Eligible to bid';
+    return (
+      <div className="mt-2 space-y-2">
+        {/* Cycle progress + next bid */}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          <span className="text-amber-700 font-medium">
+            Cycle {elapsed} of {totalCycles} · {remaining} remaining
+          </span>
+          {entry.chitIsForeman && (
+            <span className="text-amber-600">🏦 Foreman</span>
+          )}
+          {hasWon && !entry.chitIsForeman && (
+            <span className="text-emerald-600 font-medium">✅ Bid taken</span>
+          )}
+        </div>
 
-  return (
-    <div className="mt-2 space-y-1.5">
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        <span className="text-amber-700 font-medium">{status}</span>
-        <span className="text-gray-500">{remaining.toFixed(0)} months remaining</span>
-        <span className="text-gray-500">Monthly: <b>{formatCurrency(monthlyPmt)}</b></span>
-      </div>
-      {nextBid && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs text-gray-500">
-            Next bid: <b>{formatDate(nextBid)}</b>
+            Next bid: <b>{formatDate(nextBidDate)}</b>
           </span>
           {urgent && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-semibold animate-pulse">
@@ -78,9 +89,50 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
             </span>
           )}
         </div>
-      )}
-    </div>
-  );
+
+        {/* Financials */}
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <div>
+            <p className="text-gray-400 mb-0.5">Paid so far</p>
+            <p className="font-semibold text-gray-700">{formatCurrency(totalPaid)}</p>
+          </div>
+          <div>
+            <p className="text-gray-400 mb-0.5">Bid received</p>
+            <p className="font-semibold text-gray-700">
+              {hasWon && bidReceived > 0 ? formatCurrency(bidReceived) : '—'}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-400 mb-0.5">Net gain</p>
+            <p className={`font-semibold ${netGain !== null ? (netGain >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
+              {netGain !== null
+                ? `${netGain >= 0 ? '+' : ''}${formatCurrency(netGain)}${gainPct !== null ? ` (${gainPct.toFixed(0)}%)` : ''}`
+                : 'Ongoing'}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-xs text-gray-400">
+          {n} members · ₹{fv.toLocaleString('en-IN')} face value · {d} months
+        </p>
+      </div>
+    );
+  }
+
+  // Legacy chit (JSON in notes — read-only display)
+  try {
+    const meta = JSON.parse(entry.notes);
+    if (meta?.total_members) {
+      return (
+        <p className="text-xs text-amber-600 mt-2 italic">
+          Legacy chit data — edit to migrate to new format
+        </p>
+      );
+    }
+  } catch { /* not JSON */ }
+  return entry.notes
+    ? <p className="text-xs text-gray-500 mt-1 truncate">{entry.notes}</p>
+    : null;
 }
 
 function MFDetail({ entry }: { entry: SavingsEntry }) {
@@ -108,10 +160,9 @@ function TypeDetail({ entry }: { entry: SavingsEntry }) {
   if (entry.type === 'FD')           return <FDDetail   entry={entry} />;
   if (entry.type === 'Chit Funds')   return <ChitDetail entry={entry} />;
   if (entry.type === 'Mutual Funds') return <MFDetail   entry={entry} />;
-  // Generic: show plain notes if not JSON
   try {
     JSON.parse(entry.notes);
-    return null; // JSON from other entries — don't show raw
+    return null;
   } catch {
     return entry.notes
       ? <p className="text-xs text-gray-500 mt-1 truncate">{entry.notes}</p>
@@ -137,10 +188,12 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
   return (
     <div className="space-y-3">
       {savings.map((s) => {
-        const gain     = s.currentValue - s.amountInvested;
-        const gainPct  = s.amountInvested > 0 ? (gain / s.amountInvested) * 100 : 0;
+        const isChitNew = s.type === 'Chit Funds' && s.chitMembers !== null;
+        // For chit entries, gain is already in currentValue - amountInvested
+        const gain    = s.currentValue - s.amountInvested;
+        const gainPct = s.amountInvested > 0 ? (gain / s.amountInvested) * 100 : 0;
         const positive = gain >= 0;
-        const color    = SAVINGS_TYPE_COLORS[s.type];
+        const color   = SAVINGS_TYPE_COLORS[s.type];
 
         return (
           <div key={s.id}
@@ -193,24 +246,26 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
             {/* ── Type-specific detail ── */}
             <TypeDetail entry={s} />
 
-            {/* ── Amounts row ── */}
-            <div className="mt-3 pt-3 border-t border-gray-50 grid grid-cols-3 gap-2">
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Invested</p>
-                <p className="text-sm font-semibold text-gray-700">{formatCurrency(s.amountInvested)}</p>
+            {/* ── Amounts row (skip for new-schema chit — already shown in ChitDetail) ── */}
+            {!isChitNew && (
+              <div className="mt-3 pt-3 border-t border-gray-50 grid grid-cols-3 gap-2">
+                <div>
+                  <p className="text-xs text-gray-400 mb-0.5">Invested</p>
+                  <p className="text-sm font-semibold text-gray-700">{formatCurrency(s.amountInvested)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400 mb-0.5">Current</p>
+                  <p className="text-sm font-semibold text-gray-900">{formatCurrency(s.currentValue)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-400 mb-0.5">Gain / Loss</p>
+                  <p className={`text-sm font-semibold ${positive ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {positive ? '+' : ''}{formatCurrency(gain)}
+                    <span className="text-xs font-normal ml-1">({gainPct.toFixed(1)}%)</span>
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Current</p>
-                <p className="text-sm font-semibold text-gray-900">{formatCurrency(s.currentValue)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-400 mb-0.5">Gain / Loss</p>
-                <p className={`text-sm font-semibold ${positive ? 'text-emerald-600' : 'text-red-500'}`}>
-                  {positive ? '+' : ''}{formatCurrency(gain)}
-                  <span className="text-xs font-normal ml-1">({gainPct.toFixed(1)}%)</span>
-                </p>
-              </div>
-            </div>
+            )}
           </div>
         );
       })}

@@ -1,15 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { SavingsEntry, SavingsType } from '@/lib/types';
+import type { SavingsEntry, SavingsType, ChitCycle, ChitCycleInput } from '@/lib/types';
 import { SAVINGS_TYPES } from '@/lib/types';
-import { formatCurrency, formatDate, todayISO, addMonths } from '@/lib/utils';
+import { formatCurrency, formatDate, todayISO, addMonths, daysUntil } from '@/lib/utils';
 import {
   calcFDValue, fdMaturityDate,
-  chitPoolPerBid, chitNextBidDate, chitEndDate,
-  calcChitCurrentValue, calcChitMonthlyPayment, chitMonthsRemaining, chitBidTable,
   type CompoundFrequency,
 } from '@/lib/notesParsers';
+import { elapsedCycles } from '@/lib/chitFundCalc';
 
 // ─── Shared input / label styles ─────────────────────────────────────────────
 
@@ -30,21 +29,12 @@ function Row({ children }: { children: React.ReactNode }) {
   return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
-// ─── Props ────────────────────────────────────────────────────────────────────
-
-interface Props {
-  initial?: SavingsEntry | null;
-  onSubmit: (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => void;
-  onCancel: () => void;
-  submitting?: boolean;
-}
-
 // ─── Chit step indicator ──────────────────────────────────────────────────────
 
-function StepBar({ step }: { step: number }) {
+function StepBar({ step, labels }: { step: number; labels: string[] }) {
   return (
     <div className="flex items-center gap-2 mb-4">
-      {['Fund Basics', 'Your Status', 'Summary'].map((label, i) => {
+      {labels.map((label, i) => {
         const n = i + 1;
         const active = n === step;
         const done = n < step;
@@ -62,7 +52,7 @@ function StepBar({ step }: { step: number }) {
               ${active ? 'text-indigo-700' : 'text-gray-400'}`}>
               {label}
             </span>
-            {i < 2 && <div className="flex-1 h-px bg-gray-200" />}
+            {i < labels.length - 1 && <div className="flex-1 h-px bg-gray-200" />}
           </div>
         );
       })}
@@ -70,19 +60,46 @@ function StepBar({ step }: { step: number }) {
   );
 }
 
+// ─── Chit past-cycle row state ────────────────────────────────────────────────
+
+interface PastCycleState {
+  cycleNumber: number;
+  amountPaid: string;
+  userWon: boolean;
+  bidAmountReceived: string;
+  impliedBidAmount: number | null;
+  commissionDistributed: number | null;
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+interface Props {
+  initial?: SavingsEntry | null;
+  initialCycles?: ChitCycle[];
+  onSubmit: (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onChitSubmit?: (
+    data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>,
+    cycles: ChitCycleInput[],
+  ) => void;
+  onCancel: () => void;
+  submitting?: boolean;
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function SavingsForm({ initial, onSubmit, onCancel, submitting = false }: Props) {
+export default function SavingsForm({
+  initial, initialCycles, onSubmit, onChitSubmit, onCancel, submitting = false,
+}: Props) {
   // ── Common ──
-  const [name, setName]         = useState('');
-  const [type, setType]         = useState<SavingsType>('FD');
+  const [name, setName]           = useState('');
+  const [type, setType]           = useState<SavingsType>('FD');
   const [startDate, setStartDate] = useState(todayISO());
-  const [errors, setErrors]     = useState<Record<string, string>>({});
+  const [errors, setErrors]       = useState<Record<string, string>>({});
 
   // ── Generic (Stocks, PPF, Gold, Other) ──
-  const [gInvested, setGInvested]   = useState('');
-  const [gCurrent, setGCurrent]     = useState('');
-  const [gNotes, setGNotes]         = useState('');
+  const [gInvested, setGInvested] = useState('');
+  const [gCurrent, setGCurrent]   = useState('');
+  const [gNotes, setGNotes]       = useState('');
 
   // ── FD ──
   const [fdPrincipal, setFdPrincipal] = useState('');
@@ -90,33 +107,26 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
   const [fdTenure, setFdTenure]       = useState('');
   const [fdFreq, setFdFreq]           = useState<CompoundFrequency>('quarterly');
 
-  // ── Chit Fund (all steps) ──
-  const [chitStep, setChitStep]       = useState<1 | 2 | 3>(1);
-  const [chitMembers, setChitMembers] = useState('');
-  const [chitMonthly, setChitMonthly] = useState('');
-  const [chitDuration, setChitDuration] = useState('');
-  const [chitForemanPct, setChitForemanPct] = useState('5');
-  const [chitIsForeman, setChitIsForeman]   = useState(false);
-  const [chitChitType, setChitChitType]     = useState<'new' | 'existing'>('new');
-  const [chitBids, setChitBids]             = useState('0');
-  const [chitPaid, setChitPaid]             = useState('0');
-  const [chitHasBid, setChitHasBid]         = useState(false);
-  const [chitBidNum, setChitBidNum]         = useState('');
-  const [chitReceived, setChitReceived]     = useState('');
-  const [chitDividend, setChitDividend]     = useState('0');
+  // ── Chit Fund (new schema) ──
+  const [chitStep, setChitStep]           = useState<1 | 2 | 3>(1);
+  const [chitMembers, setChitMembers]     = useState('');
+  const [chitFaceValue, setChitFaceValue] = useState('');
+  const [chitDuration, setChitDuration]   = useState('');
+  const [chitIsForeman, setChitIsForeman] = useState(false);
+  const [chitPastCycles, setChitPastCycles] = useState<PastCycleState[]>([]);
 
   // ── MF ──
-  const [mfFolio, setMfFolio]       = useState('');
-  const [mfScheme, setMfScheme]     = useState('');
-  const [mfUnits, setMfUnits]       = useState('');
-  const [mfNavBuy, setMfNavBuy]     = useState('');
-  const [mfCode, setMfCode]         = useState('');
+  const [mfFolio, setMfFolio]           = useState('');
+  const [mfScheme, setMfScheme]         = useState('');
+  const [mfUnits, setMfUnits]           = useState('');
+  const [mfNavBuy, setMfNavBuy]         = useState('');
+  const [mfCode, setMfCode]             = useState('');
   const [mfCurrentNav, setMfCurrentNav] = useState('');
-  const [mfNavDate, setMfNavDate]   = useState('');
-  const [mfFetching, setMfFetching] = useState(false);
-  const [mfFetchErr, setMfFetchErr] = useState('');
+  const [mfNavDate, setMfNavDate]       = useState('');
+  const [mfFetching, setMfFetching]     = useState(false);
+  const [mfFetchErr, setMfFetchErr]     = useState('');
 
-  // ── Populate from `initial` (edit mode) ────────────────────────────────────
+  // ── Populate from `initial` (edit mode) ──────────────────────────────────
 
   useEffect(() => {
     setErrors({});
@@ -125,9 +135,8 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       setName(''); setType('FD'); setStartDate(todayISO());
       setGInvested(''); setGCurrent(''); setGNotes('');
       setFdPrincipal(''); setFdRate(''); setFdTenure(''); setFdFreq('quarterly');
-      setChitMembers(''); setChitMonthly(''); setChitDuration(''); setChitForemanPct('5');
-      setChitIsForeman(false); setChitChitType('new'); setChitBids('0'); setChitPaid('0');
-      setChitHasBid(false); setChitBidNum(''); setChitReceived(''); setChitDividend('0');
+      setChitMembers(''); setChitFaceValue(''); setChitDuration('');
+      setChitIsForeman(false); setChitPastCycles([]);
       setMfFolio(''); setMfScheme(''); setMfUnits(''); setMfNavBuy('');
       setMfCode(''); setMfCurrentNav(''); setMfNavDate(''); setMfFetchErr('');
       return;
@@ -145,18 +154,24 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       setFdTenure(String(meta.tenure_months ?? ''));
       setFdFreq((meta.compound_frequency as CompoundFrequency) ?? 'quarterly');
     } else if (initial.type === 'Chit Funds') {
-      setChitMembers(String(meta.total_members ?? ''));
-      setChitMonthly(String(meta.monthly_contribution ?? ''));
-      setChitDuration(String(meta.total_duration_months ?? ''));
-      setChitForemanPct(String(meta.foreman_commission_pct ?? '5'));
-      setChitIsForeman(Boolean(meta.is_foreman));
-      setChitChitType((meta.bids_completed as number) > 0 ? 'existing' : 'new');
-      setChitBids(String(meta.bids_completed ?? '0'));
-      setChitPaid(String(meta.amount_paid_so_far ?? '0'));
-      setChitHasBid(Boolean(meta.user_has_taken_bid));
-      setChitBidNum(meta.which_bid_number != null ? String(meta.which_bid_number) : '');
-      setChitReceived(meta.amount_received != null ? String(meta.amount_received) : '');
-      setChitDividend(String(meta.accumulated_dividend ?? '0'));
+      setChitMembers(String(initial.chitMembers ?? ''));
+      setChitFaceValue(String(initial.chitFaceValue ?? ''));
+      setChitDuration(String(initial.chitDurationMonths ?? ''));
+      setChitIsForeman(initial.chitIsForeman ?? false);
+      // Populate past cycles from initialCycles (if provided for edit mode)
+      if (initialCycles?.length) {
+        setChitPastCycles(
+          initialCycles.map((c) => ({
+            cycleNumber: c.cycleNumber,
+            amountPaid: String(c.amountPaid),
+            userWon: c.userWon,
+            bidAmountReceived:
+              c.bidAmountReceived !== null ? String(c.bidAmountReceived) : '',
+            impliedBidAmount: null,
+            commissionDistributed: null,
+          })),
+        );
+      }
     } else if (initial.type === 'Mutual Funds') {
       setMfFolio(String(meta.folio ?? ''));
       setMfScheme(String(meta.scheme_name ?? ''));
@@ -170,9 +185,9 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       setGCurrent(String(initial.currentValue));
       setGNotes(initial.notes);
     }
-  }, [initial]);
+  }, [initial, initialCycles]);
 
-  // ── FD derived values ──────────────────────────────────────────────────────
+  // ── FD derived values ─────────────────────────────────────────────────────
 
   const fdCurrentValue = useMemo(() => {
     const p = Number(fdPrincipal), r = Number(fdRate), t = Number(fdTenure);
@@ -187,57 +202,120 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
   const fdGainPct = Number(fdPrincipal) > 0
     ? ((fdCurrentValue - Number(fdPrincipal)) / Number(fdPrincipal)) * 100 : 0;
 
-  // ── Chit derived values ────────────────────────────────────────────────────
+  // ── Chit derived values ───────────────────────────────────────────────────
 
-  const chitBidInterval = useMemo(() => {
-    const m = Number(chitMembers), d = Number(chitDuration);
-    return m > 0 ? d / m : 0;
+  const chitBidFreqVal = useMemo(() => {
+    const n = Number(chitMembers), d = Number(chitDuration);
+    return n > 0 && d > 0 ? Math.round(d / n) : 0;
   }, [chitMembers, chitDuration]);
 
-  const chitEndDateStr = useMemo(
-    () => (startDate && chitDuration ? addMonths(startDate, Number(chitDuration)) : ''),
-    [startDate, chitDuration],
+  const chitTotalPool = useMemo(
+    () => Number(chitMembers) * Number(chitFaceValue),
+    [chitMembers, chitFaceValue],
   );
 
-  const chitMeta = useMemo(() => ({
-    total_members: Number(chitMembers),
-    monthly_contribution: Number(chitMonthly),
-    total_duration_months: Number(chitDuration),
-    bid_interval: chitBidInterval,
-    foreman_commission_pct: Number(chitForemanPct),
-    is_foreman: chitIsForeman,
-    bids_completed: chitIsForeman ? 1 : Number(chitBids),
-    amount_paid_so_far: Number(chitPaid),
-    user_has_taken_bid: chitIsForeman ? true : chitHasBid,
-    accumulated_dividend: Number(chitDividend),
-    which_bid_number: chitHasBid && chitBidNum ? Number(chitBidNum) : null,
-    amount_received: chitIsForeman
-      ? chitPoolPerBid({ total_members: Number(chitMembers), monthly_contribution: Number(chitMonthly), bid_interval: chitBidInterval } as Parameters<typeof chitPoolPerBid>[0])
-      : (chitHasBid && chitReceived ? Number(chitReceived) : null),
-  }), [chitMembers, chitMonthly, chitDuration, chitBidInterval, chitForemanPct,
-       chitIsForeman, chitBids, chitPaid, chitHasBid, chitBidNum, chitReceived, chitDividend]);
+  const chitElapsed = useMemo(
+    () => (chitBidFreqVal > 0 ? elapsedCycles(startDate, chitBidFreqVal) : 0),
+    [startDate, chitBidFreqVal],
+  );
 
-  const chitPoolValue  = useMemo(() => chitPoolPerBid(chitMeta as Parameters<typeof chitPoolPerBid>[0]), [chitMeta]);
-  const chitNextBid    = useMemo(() => chitNextBidDate(startDate, chitMeta as Parameters<typeof chitNextBidDate>[1]), [startDate, chitMeta]);
-  const chitCurrentVal = useMemo(() => calcChitCurrentValue(chitMeta as Parameters<typeof calcChitCurrentValue>[0]), [chitMeta]);
-  const chitMonthlyPmt = useMemo(() => calcChitMonthlyPayment(chitMeta as Parameters<typeof calcChitMonthlyPayment>[0]), [chitMeta]);
-  const chitRemaining  = useMemo(() => chitMonthsRemaining(chitMeta as Parameters<typeof chitMonthsRemaining>[0]), [chitMeta]);
-  const chitTable      = useMemo(() => chitBidTable(chitMeta as Parameters<typeof chitBidTable>[0]), [chitMeta]);
-  const chitCommission = useMemo(() => (chitPoolValue * Number(chitForemanPct)) / 100, [chitPoolValue, chitForemanPct]);
-  const chitUsable     = chitPoolValue - chitCommission;
+  // Sync past-cycle rows to elapsed count whenever step-1 fields change
+  useEffect(() => {
+    if (type !== 'Chit Funds') return;
+    if (chitElapsed === 0) { setChitPastCycles([]); return; }
+    const fv = Number(chitFaceValue);
+    const n  = Number(chitMembers);
+    const pool = n * fv;
+    setChitPastCycles((prev) => {
+      const next: PastCycleState[] = [];
+      for (let i = 1; i <= chitElapsed; i++) {
+        const existing = prev.find((c) => c.cycleNumber === i);
+        if (i === 1) {
+          // Cycle 1 is always locked (foreman cycle)
+          next.push({
+            cycleNumber: 1,
+            amountPaid: fv > 0 ? String(fv) : '',
+            userWon: chitIsForeman,
+            bidAmountReceived: chitIsForeman && pool > 0 ? String(pool) : '',
+            impliedBidAmount: null,
+            commissionDistributed: null,
+          });
+        } else if (existing) {
+          next.push(existing);
+        } else {
+          next.push({
+            cycleNumber: i,
+            amountPaid: fv > 0 ? String(fv) : '',
+            userWon: false,
+            bidAmountReceived: '',
+            impliedBidAmount: null,
+            commissionDistributed: null,
+          });
+        }
+      }
+      return next;
+    });
+  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman]);
 
-  // ── MF derived values ──────────────────────────────────────────────────────
+  // Back-calculate commission for a cycle row on blur
+  function recalcCycleRow(idx: number) {
+    setChitPastCycles((prev) => {
+      const next = [...prev];
+      const c = next[idx];
+      if (!c || idx === 0) return prev; // cycle 1 locked
+      const fv = Number(chitFaceValue);
+      const n  = Number(chitMembers);
+      const pool = n * fv;
+      const amtPaid = Number(c.amountPaid);
+      if (!amtPaid || isNaN(amtPaid)) return prev;
+      const eligibleCount    = Math.max(0, n - c.cycleNumber);
+      const commPerMember    = Math.max(0, fv - amtPaid);
+      const totalComm        = commPerMember * eligibleCount;
+      const impliedBidAmount = pool - totalComm;
+      next[idx] = { ...c, impliedBidAmount, commissionDistributed: totalComm };
+      return next;
+    });
+  }
+
+  // Chit Step 3 summary
+  const chitSummary = useMemo(() => {
+    const fv   = Number(chitFaceValue);
+    const n    = Number(chitMembers);
+    const d    = Number(chitDuration);
+    const bf   = chitBidFreqVal;
+    const totalCycles    = bf > 0 ? Math.round(d / bf) : 0;
+    const totalPaid      = chitPastCycles.reduce((s, c) => s + (Number(c.amountPaid) || 0), 0);
+    const wonCycle       = chitPastCycles.find((c) => c.userWon);
+    const hasWon         = chitIsForeman || !!wonCycle;
+    const bidReceived    = chitIsForeman
+      ? n * fv
+      : (wonCycle?.bidAmountReceived ? Number(wonCycle.bidAmountReceived) : 0);
+    const remainingCycles    = Math.max(0, totalCycles - chitPastCycles.length);
+    const projectedRemaining = remainingCycles * fv;
+    const totalCommitted     = totalPaid + projectedRemaining;
+    const netGain  = bidReceived > 0 ? bidReceived - totalCommitted : null;
+    const gainPct  = netGain !== null && totalCommitted > 0
+      ? (netGain / totalCommitted) * 100 : null;
+    const nextBidDate = startDate && bf > 0
+      ? addMonths(startDate, (chitPastCycles.length + 1) * bf) : '';
+    const daysLeft = nextBidDate ? daysUntil(nextBidDate) : null;
+    return {
+      totalPaid, projectedRemaining, totalCommitted,
+      bidReceived, netGain, gainPct, hasWon,
+      remainingCycles, totalCycles, nextBidDate, daysLeft,
+    };
+  }, [chitPastCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal,
+      chitIsForeman, startDate]);
+
+  // ── MF derived values ─────────────────────────────────────────────────────
 
   const mfInvested     = useMemo(() => Number(mfUnits) * Number(mfNavBuy), [mfUnits, mfNavBuy]);
   const mfCurrentValue = useMemo(() => Number(mfUnits) * Number(mfCurrentNav), [mfUnits, mfCurrentNav]);
   const mfGainPct      = mfInvested > 0 ? ((mfCurrentValue - mfInvested) / mfInvested) * 100 : 0;
 
-  // ── MF NAV fetch ───────────────────────────────────────────────────────────
-
   const fetchNav = useCallback(async () => {
     if (!mfCode.trim()) return;
-    setMfFetching(true);
-    setMfFetchErr('');
+    setMfFetching(true); setMfFetchErr('');
     try {
       const res  = await fetch(`https://api.mfapi.in/mf/${mfCode.trim()}`);
       const json = await res.json();
@@ -248,14 +326,11 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
         setMfNavDate(json.data[0].date);
         if (!mfScheme && json.meta?.scheme_name) setMfScheme(json.meta.scheme_name);
       }
-    } catch {
-      setMfFetchErr('Network error — check your connection');
-    } finally {
-      setMfFetching(false);
-    }
+    } catch { setMfFetchErr('Network error — check your connection'); }
+    finally  { setMfFetching(false); }
   }, [mfCode, mfScheme]);
 
-  // ── Validation helpers ─────────────────────────────────────────────────────
+  // ── Validation ────────────────────────────────────────────────────────────
 
   const setErr = (k: string, v: string) => setErrors((p) => ({ ...p, [k]: v }));
   const clrErr = (k: string) => setErrors((p) => { const n = { ...p }; delete n[k]; return n; });
@@ -263,43 +338,49 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
   function validateCommon() {
     let ok = true;
     if (!name.trim()) { setErr('name', 'Name is required'); ok = false; }
-    if (!startDate) { setErr('startDate', 'Date is required'); ok = false; }
+    if (!startDate)   { setErr('startDate', 'Date is required'); ok = false; }
     return ok;
   }
 
   function validateFD() {
     let ok = validateCommon();
     if (!fdPrincipal || Number(fdPrincipal) <= 0) { setErr('fdPrincipal', 'Enter amount'); ok = false; }
-    if (!fdRate || Number(fdRate) <= 0) { setErr('fdRate', 'Enter interest rate'); ok = false; }
-    if (!fdTenure || Number(fdTenure) <= 0) { setErr('fdTenure', 'Enter tenure'); ok = false; }
+    if (!fdRate || Number(fdRate) <= 0)           { setErr('fdRate', 'Enter interest rate'); ok = false; }
+    if (!fdTenure || Number(fdTenure) <= 0)       { setErr('fdTenure', 'Enter tenure'); ok = false; }
     return ok;
   }
 
   function validateChitStep1() {
     let ok = validateCommon();
-    if (!chitMembers || Number(chitMembers) < 2) { setErr('chitMembers', 'Min 2 members'); ok = false; }
-    if (!chitMonthly || Number(chitMonthly) <= 0) { setErr('chitMonthly', 'Enter monthly amount'); ok = false; }
+    if (!chitMembers || Number(chitMembers) < 2)   { setErr('chitMembers', 'Min 2 members'); ok = false; }
+    if (!chitFaceValue || Number(chitFaceValue) <= 0) { setErr('chitFaceValue', 'Enter face value'); ok = false; }
     if (!chitDuration || Number(chitDuration) <= 0) { setErr('chitDuration', 'Enter duration'); ok = false; }
-    if (!chitForemanPct || Number(chitForemanPct) < 0) { setErr('chitForemanPct', 'Enter commission'); ok = false; }
     return ok;
   }
 
   function validateChitStep2() {
+    const fv = Number(chitFaceValue);
     let ok = true;
-    if (chitChitType === 'existing') {
-      if (Number(chitPaid) < 0) { setErr('chitPaid', 'Enter valid amount'); ok = false; }
-      if (chitHasBid && !chitIsForeman && !chitReceived) {
-        setErr('chitReceived', 'Enter amount received'); ok = false;
+    chitPastCycles.forEach((c, i) => {
+      if (i === 0) return; // cycle 1 locked, always valid
+      const amt = Number(c.amountPaid);
+      if (!c.amountPaid || isNaN(amt) || amt <= 0) {
+        setErr(`cycle_${c.cycleNumber}_paid`, 'Enter amount paid'); ok = false;
+      } else if (amt > fv) {
+        setErr(`cycle_${c.cycleNumber}_paid`, `Must be ≤ ${formatCurrency(fv)}`); ok = false;
       }
-    }
+      if (c.userWon && !c.bidAmountReceived) {
+        setErr(`cycle_${c.cycleNumber}_bid`, 'Enter amount received'); ok = false;
+      }
+    });
     return ok;
   }
 
   function validateMF() {
     let ok = validateCommon();
     if (!mfScheme.trim()) { setErr('mfScheme', 'Scheme name required'); ok = false; }
-    if (!mfUnits || Number(mfUnits) <= 0) { setErr('mfUnits', 'Enter units'); ok = false; }
-    if (!mfNavBuy || Number(mfNavBuy) <= 0) { setErr('mfNavBuy', 'Enter NAV at purchase'); ok = false; }
+    if (!mfUnits || Number(mfUnits) <= 0)       { setErr('mfUnits', 'Enter units'); ok = false; }
+    if (!mfNavBuy || Number(mfNavBuy) <= 0)     { setErr('mfNavBuy', 'Enter NAV at purchase'); ok = false; }
     if (!mfCurrentNav || Number(mfCurrentNav) <= 0) { setErr('mfCurrentNav', 'Enter current NAV'); ok = false; }
     return ok;
   }
@@ -311,7 +392,7 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
     return ok;
   }
 
-  // ── Submit ─────────────────────────────────────────────────────────────────
+  // ── Submit ────────────────────────────────────────────────────────────────
 
   const handleSubmit = (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -323,37 +404,63 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
         name: name.trim(), type, startDate,
         amountInvested: Number(fdPrincipal),
         currentValue: Math.round(fdCurrentValue * 100) / 100,
-        notes: JSON.stringify({
-          interest_rate: Number(fdRate),
-          tenure_months: Number(fdTenure),
-          compound_frequency: fdFreq,
-        }),
+        notes: JSON.stringify({ interest_rate: Number(fdRate), tenure_months: Number(fdTenure), compound_frequency: fdFreq }),
+        chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
+        chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
       });
 
     } else if (type === 'Chit Funds') {
-      if (!validateChitStep1() || !validateChitStep2()) return;
-      const finalMeta = {
-        total_members: Number(chitMembers),
-        monthly_contribution: Number(chitMonthly),
-        total_duration_months: Number(chitDuration),
-        bid_interval: chitBidInterval,
-        foreman_commission_pct: Number(chitForemanPct),
-        is_foreman: chitIsForeman,
-        bids_completed: chitIsForeman ? 1 : Number(chitBids),
-        amount_paid_so_far: Number(chitPaid),
-        user_has_taken_bid: chitIsForeman || chitHasBid,
-        accumulated_dividend: Number(chitDividend),
-        which_bid_number: chitHasBid && chitBidNum ? Number(chitBidNum) : null,
-        amount_received: chitIsForeman
-          ? chitPoolValue
-          : (chitHasBid && chitReceived ? Number(chitReceived) : null),
-      };
-      onSubmit({
-        name: name.trim(), type, startDate,
-        amountInvested: Number(chitPaid),
-        currentValue: calcChitCurrentValue(finalMeta),
-        notes: JSON.stringify(finalMeta),
+      if (!validateChitStep1()) return;
+      if (chitElapsed > 0 && !validateChitStep2()) return;
+
+      const fv  = Number(chitFaceValue);
+      const n   = Number(chitMembers);
+      const bf  = chitBidFreqVal;
+
+      const cycles: ChitCycleInput[] = chitPastCycles.map((c) => {
+        const isFirst      = c.cycleNumber === 1;
+        const amtPaid      = Number(c.amountPaid) || 0;
+        const eligible     = Math.max(0, n - c.cycleNumber);
+        const commPerMem   = isFirst ? 0 : Math.max(0, fv - amtPaid);
+        const totalComm    = commPerMem * eligible;
+        return {
+          cycleNumber: c.cycleNumber,
+          amountPaid: amtPaid,
+          commissionReceived: commPerMem,
+          totalCommission: totalComm,
+          userWon: c.userWon,
+          bidAmountReceived: c.userWon ? (Number(c.bidAmountReceived) || null) : null,
+          cycleDate: startDate && bf > 0
+            ? addMonths(startDate, c.cycleNumber * bf) : null,
+        };
       });
+
+      const totalPaid   = cycles.reduce((s, c) => s + c.amountPaid, 0);
+      const wonCycle    = cycles.find((c) => c.userWon);
+      const bidReceived = chitIsForeman ? (n * fv)
+        : (wonCycle?.bidAmountReceived ?? 0);
+      const hasWon      = chitIsForeman || !!wonCycle;
+      const currentValue = hasWon ? bidReceived : totalPaid;
+
+      const savingsData: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'> = {
+        name: name.trim(), type, startDate,
+        amountInvested: totalPaid,
+        currentValue,
+        notes: '',
+        chitMembers: n,
+        chitFaceValue: fv,
+        chitDurationMonths: Number(chitDuration),
+        chitBidFrequency: bf,
+        chitWonCycle: wonCycle?.cycleNumber ?? (chitIsForeman ? 1 : null),
+        chitBidReceived: bidReceived > 0 ? bidReceived : null,
+        chitIsForeman,
+      };
+
+      if (onChitSubmit) {
+        onChitSubmit(savingsData, cycles);
+      } else {
+        onSubmit(savingsData);
+      }
 
     } else if (type === 'Mutual Funds') {
       if (!validateMF()) return;
@@ -362,14 +469,14 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
         amountInvested: Math.round(mfInvested * 100) / 100,
         currentValue: Math.round(mfCurrentValue * 100) / 100,
         notes: JSON.stringify({
-          folio: mfFolio.trim(),
-          scheme_name: mfScheme.trim(),
-          units: Number(mfUnits),
-          nav_at_purchase: Number(mfNavBuy),
+          folio: mfFolio.trim(), scheme_name: mfScheme.trim(),
+          units: Number(mfUnits), nav_at_purchase: Number(mfNavBuy),
           current_nav: Number(mfCurrentNav),
           scheme_code: mfCode ? Number(mfCode) : null,
           nav_updated_date: mfNavDate,
         }),
+        chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
+        chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
       });
 
     } else {
@@ -379,31 +486,44 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
         amountInvested: Number(gInvested),
         currentValue: Number(gCurrent),
         notes: gNotes.trim(),
+        chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
+        chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
       });
     }
   };
 
-  // ── Chit next/back ─────────────────────────────────────────────────────────
+  // ── Chit step nav ─────────────────────────────────────────────────────────
 
   const chitNext = () => {
     setErrors({});
-    if (chitStep === 1 && !validateChitStep1()) return;
-    if (chitStep === 2 && !validateChitStep2()) return;
-    setChitStep((s) => Math.min(3, s + 1) as 1 | 2 | 3);
+    if (chitStep === 1) {
+      if (!validateChitStep1()) return;
+      setChitStep(chitElapsed > 0 ? 2 : 3);
+    } else if (chitStep === 2) {
+      if (!validateChitStep2()) return;
+      setChitStep(3);
+    }
   };
-  const chitBack = () => setChitStep((s) => Math.max(1, s - 1) as 1 | 2 | 3);
+  const chitBack = () => {
+    if (chitStep === 3) setChitStep(chitElapsed > 0 ? 2 : 1);
+    else setChitStep((s) => Math.max(1, s - 1) as 1 | 2 | 3);
+  };
 
   const isChit = type === 'Chit Funds';
+  const stepLabels = chitElapsed > 0
+    ? ['Fund Basics', 'Past Cycles', 'Summary']
+    : ['Fund Basics', 'Summary'];
+  // Map real step (1,2,3) to stepLabel index
+  const stepBarIndex = chitElapsed > 0 ? chitStep : (chitStep === 3 ? 2 : 1);
 
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
   // RENDER
-  // ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
 
-      {/* ── Common: Name + Type ─── */}
-      {/* Hide common fields in chit steps 2 & 3 to save space */}
+      {/* ── Common: Name + Type ── (hidden in chit steps 2 & 3 to save space) */}
       {(!isChit || chitStep === 1) && (
         <>
           <div>
@@ -433,14 +553,13 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       )}
 
       {/* ════════════════════════════════════════════════════════════
-          FD SECTION
+          FD SECTION — untouched
       ════════════════════════════════════════════════════════════ */}
       {type === 'FD' && (
         <>
           <div>
             <Lbl>Amount Invested (₹) *</Lbl>
-            <input type="number" min="0" step="any" value={fdPrincipal}
-              placeholder="100000"
+            <input type="number" min="0" step="any" value={fdPrincipal} placeholder="100000"
               onChange={(e) => { setFdPrincipal(e.target.value); clrErr('fdPrincipal'); }}
               className={inp} />
             <Err msg={errors.fdPrincipal} />
@@ -449,16 +568,14 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
           <Row>
             <div>
               <Lbl>Interest Rate (% p.a.) *</Lbl>
-              <input type="number" min="0" step="0.01" value={fdRate}
-                placeholder="7.5"
+              <input type="number" min="0" step="0.01" value={fdRate} placeholder="7.5"
                 onChange={(e) => { setFdRate(e.target.value); clrErr('fdRate'); }}
                 className={inp} />
               <Err msg={errors.fdRate} />
             </div>
             <div>
               <Lbl>Tenure (months) *</Lbl>
-              <input type="number" min="1" step="1" value={fdTenure}
-                placeholder="24"
+              <input type="number" min="1" step="1" value={fdTenure} placeholder="24"
                 onChange={(e) => { setFdTenure(e.target.value); clrErr('fdTenure'); }}
                 className={inp} />
               <Err msg={errors.fdTenure} />
@@ -475,30 +592,21 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
             </select>
           </div>
 
-          {/* Live preview */}
           {fdCurrentValue > 0 && (
             <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
               <p className="text-xs font-semibold text-blue-600 mb-3 uppercase tracking-wide">Live Preview</p>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-blue-400">Invested</p>
-                  <p className="text-sm font-bold text-blue-900">{formatCurrency(Number(fdPrincipal))}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-blue-400">Maturity Value</p>
-                  <p className="text-sm font-bold text-blue-900">{formatCurrency(fdCurrentValue)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-blue-400">Gain</p>
+                <div><p className="text-xs text-blue-400">Invested</p>
+                  <p className="text-sm font-bold text-blue-900">{formatCurrency(Number(fdPrincipal))}</p></div>
+                <div><p className="text-xs text-blue-400">Maturity Value</p>
+                  <p className="text-sm font-bold text-blue-900">{formatCurrency(fdCurrentValue)}</p></div>
+                <div><p className="text-xs text-blue-400">Gain</p>
                   <p className="text-sm font-bold text-emerald-700">
                     +{formatCurrency(fdCurrentValue - Number(fdPrincipal))}
                     <span className="text-xs font-normal ml-1">({fdGainPct.toFixed(2)}%)</span>
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-blue-400">Maturity Date</p>
-                  <p className="text-sm font-bold text-blue-900">{fdMaturity ? formatDate(fdMaturity) : '—'}</p>
-                </div>
+                  </p></div>
+                <div><p className="text-xs text-blue-400">Maturity Date</p>
+                  <p className="text-sm font-bold text-blue-900">{fdMaturity ? formatDate(fdMaturity) : '—'}</p></div>
               </div>
             </div>
           )}
@@ -506,57 +614,65 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       )}
 
       {/* ════════════════════════════════════════════════════════════
-          CHIT FUND SECTION (3-step wizard)
+          CHIT FUND — new 3-step form
       ════════════════════════════════════════════════════════════ */}
       {type === 'Chit Funds' && (
         <div className="space-y-4">
-          <StepBar step={chitStep} />
+          <StepBar step={stepBarIndex} labels={stepLabels} />
 
           {/* ── Step 1: Fund Basics ── */}
           {chitStep === 1 && (
             <>
               <Row>
                 <div>
-                  <Lbl>Total Members *</Lbl>
-                  <input type="number" min="2" step="1" value={chitMembers}
-                    placeholder="10"
+                  <Lbl>Total Members (N) *</Lbl>
+                  <input type="number" min="2" step="1" value={chitMembers} placeholder="10"
                     onChange={(e) => { setChitMembers(e.target.value); clrErr('chitMembers'); }}
                     className={inp} />
                   <Err msg={errors.chitMembers} />
                 </div>
                 <div>
-                  <Lbl>Monthly Contribution (₹) *</Lbl>
-                  <input type="number" min="1" step="any" value={chitMonthly}
-                    placeholder="10000"
-                    onChange={(e) => { setChitMonthly(e.target.value); clrErr('chitMonthly'); }}
+                  <Lbl>Face Value per Cycle (₹) *</Lbl>
+                  <input type="number" min="1" step="any" value={chitFaceValue} placeholder="10000"
+                    onChange={(e) => { setChitFaceValue(e.target.value); clrErr('chitFaceValue'); }}
                     className={inp} />
-                  <Err msg={errors.chitMonthly} />
+                  <Err msg={errors.chitFaceValue} />
                 </div>
               </Row>
 
-              <Row>
-                <div>
-                  <Lbl>Duration (months) *</Lbl>
-                  <input type="number" min="1" step="1" value={chitDuration}
-                    placeholder="60"
-                    onChange={(e) => { setChitDuration(e.target.value); clrErr('chitDuration'); }}
-                    className={inp} />
-                  <Err msg={errors.chitDuration} />
-                </div>
-                <div>
-                  <Lbl>Foreman Commission (%) *</Lbl>
-                  <input type="number" min="0" max="20" step="0.5" value={chitForemanPct}
-                    onChange={(e) => { setChitForemanPct(e.target.value); clrErr('chitForemanPct'); }}
-                    className={inp} />
-                  <Err msg={errors.chitForemanPct} />
-                </div>
-              </Row>
+              <div>
+                <Lbl>Duration (months) *</Lbl>
+                <input type="number" min="1" step="1" value={chitDuration} placeholder="60"
+                  onChange={(e) => { setChitDuration(e.target.value); clrErr('chitDuration'); }}
+                  className={inp} />
+                <Err msg={errors.chitDuration} />
+              </div>
 
-              {/* Are you the foreman? */}
+              {/* Derived info */}
+              {chitBidFreqVal > 0 && Number(chitFaceValue) > 0 && (
+                <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between text-amber-700">
+                    <span>Bid every</span>
+                    <span className="font-semibold">{chitBidFreqVal} months</span>
+                  </div>
+                  <div className="flex justify-between text-amber-700">
+                    <span>Pool per bid</span>
+                    <span className="font-semibold">{formatCurrency(chitTotalPool)}</span>
+                  </div>
+                  {chitElapsed > 0 && (
+                    <div className="flex justify-between text-amber-800 font-medium">
+                      <span>Cycles elapsed (will ask for history)</span>
+                      <span>{chitElapsed}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Foreman toggle */}
               <div className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
                 <div>
                   <p className="text-sm font-medium text-amber-900">Are you the foreman?</p>
-                  <p className="text-xs text-amber-600 mt-0.5">Foreman receives the full pool at bid #1</p>
+                  <p className="text-xs text-amber-600 mt-0.5">You received the full pool at Cycle 1 with no commission deducted</p>
                 </div>
                 <button type="button"
                   onClick={() => setChitIsForeman((v) => !v)}
@@ -564,213 +680,162 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
                   <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${chitIsForeman ? 'translate-x-5' : ''}`} />
                 </button>
               </div>
-
-              {/* Auto-computed read-only stats */}
-              {chitMembers && chitMonthly && chitDuration && (
-                <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-xs">
-                  <div className="flex justify-between text-gray-500">
-                    <span>Total Pool</span>
-                    <span className="font-semibold text-gray-800">
-                      {formatCurrency(Number(chitMembers) * Number(chitMonthly) * Number(chitDuration))}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-gray-500">
-                    <span>Bid every</span>
-                    <span className="font-semibold text-gray-800">
-                      {chitBidInterval.toFixed(1)} months
-                    </span>
-                  </div>
-                  {chitEndDateStr && (
-                    <div className="flex justify-between text-gray-500">
-                      <span>End Date</span>
-                      <span className="font-semibold text-gray-800">{formatDate(chitEndDateStr)}</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </>
           )}
 
-          {/* ── Step 2: Current Status ── */}
+          {/* ── Step 2: Past Cycles ── */}
           {chitStep === 2 && (
-            <>
-              {/* New / Existing toggle */}
-              <div>
-                <Lbl>Chit Status</Lbl>
-                <div className="flex rounded-xl overflow-hidden border border-gray-200">
-                  {(['new', 'existing'] as const).map((opt) => (
-                    <button key={opt} type="button"
-                      onClick={() => {
-                        setChitChitType(opt);
-                        if (opt === 'new') {
-                          setChitBids('0'); setChitPaid('0');
-                          setChitHasBid(false); setChitBidNum(''); setChitReceived(''); setChitDividend('0');
-                        }
-                      }}
-                      className={`flex-1 py-2 text-sm font-medium transition-colors ${chitChitType === opt ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                      {opt === 'new' ? '🆕 New Chit' : '📋 Existing Chit'}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div className="space-y-3">
+              <p className="text-xs text-gray-500">
+                {chitElapsed} bid cycle{chitElapsed !== 1 ? 's' : ''} have occurred since {formatDate(startDate)}.
+                Fill in what you paid each cycle.
+              </p>
 
-              {chitChitType === 'existing' && !chitIsForeman && (
-                <>
-                  <Row>
-                    <div>
-                      <Lbl>Bids Completed</Lbl>
-                      <input type="number" min="0" step="1" value={chitBids}
-                        onChange={(e) => setChitBids(e.target.value)} className={inp} />
+              {chitPastCycles.map((c, idx) => {
+                const isLocked = idx === 0; // Cycle 1 always locked
+                const fv = Number(chitFaceValue);
+                return (
+                  <div key={c.cycleNumber}
+                    className={`rounded-xl border p-3 space-y-2 ${isLocked ? 'bg-amber-50 border-amber-100' : 'bg-white border-gray-100'}`}>
+
+                    {/* Row header */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-gray-700">
+                        Cycle {c.cycleNumber}
+                        {isLocked && <span className="ml-2 text-amber-600 font-normal">Foreman cycle — {chitIsForeman ? 'you took this' : 'foreman took this'}</span>}
+                      </span>
+                      {!isLocked && (
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={c.userWon}
+                            onChange={(e) => setChitPastCycles((prev) => {
+                              const next = [...prev];
+                              next[idx] = { ...next[idx], userWon: e.target.checked, bidAmountReceived: '' };
+                              return next;
+                            })}
+                            className="w-4 h-4 accent-indigo-600" />
+                          <span className="text-xs font-medium text-gray-600">I won this cycle</span>
+                        </label>
+                      )}
                     </div>
-                    <div>
-                      <Lbl>Amount Paid So Far (₹)</Lbl>
-                      <input type="number" min="0" step="any" value={chitPaid}
-                        onChange={(e) => { setChitPaid(e.target.value); clrErr('chitPaid'); }}
-                        className={inp} />
-                      <Err msg={errors.chitPaid} />
+
+                    {/* Amount paid */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <p className="text-xs text-gray-500 mb-1">Amount paid (₹)</p>
+                        <input type="number" min="0" step="any"
+                          value={c.amountPaid}
+                          disabled={isLocked}
+                          placeholder={String(fv || '')}
+                          onChange={(e) => {
+                            setChitPastCycles((prev) => {
+                              const next = [...prev];
+                              next[idx] = { ...next[idx], amountPaid: e.target.value, impliedBidAmount: null, commissionDistributed: null };
+                              return next;
+                            });
+                            clrErr(`cycle_${c.cycleNumber}_paid`);
+                          }}
+                          onBlur={() => recalcCycleRow(idx)}
+                          className={inp + ' text-sm'} />
+                        <Err msg={errors[`cycle_${c.cycleNumber}_paid`]} />
+                      </div>
+
+                      {/* Bid amount received (if won) */}
+                      {c.userWon && !isLocked && (
+                        <div className="flex-1">
+                          <p className="text-xs text-gray-500 mb-1">Bid amount received (₹)</p>
+                          <input type="number" min="0" step="any"
+                            value={c.bidAmountReceived}
+                            placeholder={String(chitTotalPool || '')}
+                            onChange={(e) => {
+                              setChitPastCycles((prev) => {
+                                const next = [...prev];
+                                next[idx] = { ...next[idx], bidAmountReceived: e.target.value };
+                                return next;
+                              });
+                              clrErr(`cycle_${c.cycleNumber}_bid`);
+                            }}
+                            className={inp + ' text-sm'} />
+                          <Err msg={errors[`cycle_${c.cycleNumber}_bid`]} />
+                        </div>
+                      )}
                     </div>
-                  </Row>
 
-                  {/* Have you taken a bid? */}
-                  <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3">
-                    <p className="text-sm font-medium text-indigo-900">Have you taken a bid?</p>
-                    <button type="button"
-                      onClick={() => { setChitHasBid((v) => !v); if (chitHasBid) { setChitBidNum(''); setChitReceived(''); } }}
-                      className={`relative w-11 h-6 rounded-full transition-colors ${chitHasBid ? 'bg-indigo-600' : 'bg-gray-200'}`}>
-                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${chitHasBid ? 'translate-x-5' : ''}`} />
-                    </button>
-                  </div>
-
-                  {chitHasBid && (
-                    <Row>
-                      <div>
-                        <Lbl>Bid Number (e.g. 3)</Lbl>
-                        <input type="number" min="1" step="1" value={chitBidNum}
-                          placeholder="3"
-                          onChange={(e) => setChitBidNum(e.target.value)} className={inp} />
-                      </div>
-                      <div>
-                        <Lbl>Amount Received (₹) *</Lbl>
-                        <input type="number" min="0" step="any" value={chitReceived}
-                          placeholder="135000"
-                          onChange={(e) => { setChitReceived(e.target.value); clrErr('chitReceived'); }}
-                          className={inp} />
-                        <Err msg={errors.chitReceived} />
-                      </div>
-                    </Row>
-                  )}
-
-                  {!chitHasBid && (
-                    <div>
-                      <Lbl>Accumulated Dividend Received (₹)</Lbl>
-                      <input type="number" min="0" step="any" value={chitDividend}
-                        placeholder="0"
-                        onChange={(e) => setChitDividend(e.target.value)} className={inp} />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Total dividend received from other members&apos; bids
+                    {/* Back-calculated commission hint */}
+                    {!isLocked && c.impliedBidAmount !== null && (
+                      <p className="text-xs text-gray-400">
+                        Implied bid amount: <span className="font-medium text-gray-600">{formatCurrency(c.impliedBidAmount)}</span>
+                        {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatCurrency(c.commissionDistributed ?? 0)}</span>
                       </p>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Foreman step 2 */}
-              {chitIsForeman && (
-                <div className="space-y-3">
-                  <div className="bg-amber-50 rounded-xl px-4 py-3 text-sm text-amber-800">
-                    <b>Foreman:</b> You received the full pool at bid #1.
-                    Amount received = {formatCurrency(chitPoolValue)}.
+                    )}
                   </div>
-                  <div>
-                    <Lbl>Amount Paid Back So Far (₹)</Lbl>
-                    <input type="number" min="0" step="any" value={chitPaid}
-                      onChange={(e) => setChitPaid(e.target.value)} className={inp} />
-                  </div>
-                </div>
-              )}
-            </>
+                );
+              })}
+            </div>
           )}
 
-          {/* ── Step 3: Calculated Summary ── */}
+          {/* ── Step 3: Summary ── */}
           {chitStep === 3 && (
             <div className="space-y-4">
-              {/* Key metrics */}
+              {/* Key numbers */}
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Next Bid Date', value: chitNextBid ? formatDate(chitNextBid) : '—' },
-                  { label: 'Months Remaining', value: `${chitRemaining.toFixed(0)} months` },
-                  { label: 'Your Monthly Payment', value: formatCurrency(chitMonthlyPmt) },
-                  { label: 'Net Position', value: formatCurrency(chitCurrentVal), colored: true },
-                ].map(({ label, value, colored }) => (
+                  { label: 'Paid so far', value: formatCurrency(chitSummary.totalPaid) },
+                  { label: 'Projected remaining', value: formatCurrency(chitSummary.projectedRemaining) },
+                  { label: 'Total committed', value: formatCurrency(chitSummary.totalCommitted) },
+                  {
+                    label: chitSummary.hasWon ? 'Bid received' : 'Bid received',
+                    value: chitSummary.bidReceived > 0 ? formatCurrency(chitSummary.bidReceived) : '—',
+                  },
+                ].map(({ label, value }) => (
                   <div key={label} className="bg-gray-50 rounded-xl p-3">
                     <p className="text-xs text-gray-400 mb-0.5">{label}</p>
-                    <p className={`text-sm font-bold ${colored ? (chitCurrentVal >= 0 ? 'text-emerald-600' : 'text-red-600') : 'text-gray-900'}`}>
-                      {value}
-                    </p>
+                    <p className="text-sm font-bold text-gray-900">{value}</p>
                   </div>
                 ))}
               </div>
 
-              {/* Pool breakdown */}
-              <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 text-xs space-y-1">
-                <p className="font-semibold text-amber-900 mb-1">Pool per bid ({chitBidInterval.toFixed(0)} months)</p>
-                <div className="flex justify-between text-amber-700">
-                  <span>Pool</span><span>{formatCurrency(chitPoolValue)}</span>
+              {/* Net gain */}
+              {chitSummary.netGain !== null && (
+                <div className={`rounded-xl p-3 flex items-center justify-between ${chitSummary.netGain >= 0 ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
+                  <span className="text-sm font-medium text-gray-700">Net Gain / Loss</span>
+                  <span className={`text-base font-bold ${chitSummary.netGain >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {chitSummary.netGain >= 0 ? '+' : ''}{formatCurrency(chitSummary.netGain)}
+                    {chitSummary.gainPct !== null && (
+                      <span className="text-xs font-normal ml-1">({chitSummary.gainPct.toFixed(1)}%)</span>
+                    )}
+                  </span>
                 </div>
-                <div className="flex justify-between text-amber-700">
-                  <span>Foreman commission ({chitForemanPct}%)</span>
-                  <span>−{formatCurrency(chitCommission)}</span>
-                </div>
-                <div className="flex justify-between font-semibold text-amber-900 pt-1 border-t border-amber-200">
-                  <span>Usable pool</span><span>{formatCurrency(chitUsable)}</span>
-                </div>
-              </div>
+              )}
 
-              {/* Bid comparison table (only if bids have happened) */}
-              {Number(chitBids) >= 1 || chitIsForeman ? (
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
-                    Bid Comparison Table
-                  </p>
-                  <div className="rounded-xl overflow-hidden border border-gray-100">
-                    <table className="w-full text-xs">
-                      <thead className="bg-gray-50 text-gray-500">
-                        <tr>
-                          <th className="text-left px-3 py-2 font-medium">Discount</th>
-                          <th className="text-right px-3 py-2 font-medium">You Receive</th>
-                          <th className="text-right px-3 py-2 font-medium">Dividend/member</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {chitTable.map((row) => (
-                          <tr key={row.discount}
-                            className={`border-t border-gray-50 ${row.discount === 10 ? 'bg-emerald-50' : 'bg-white'}`}>
-                            <td className="px-3 py-2 font-medium text-gray-700">
-                              {row.discount}%
-                              {row.discount === 10 && (
-                                <span className="ml-1.5 text-emerald-600 font-semibold">← min</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-right font-semibold text-gray-900">
-                              {formatCurrency(row.youReceive)}
-                            </td>
-                            <td className="px-3 py-2 text-right text-gray-600">
-                              {formatCurrency(row.dividendPerMember)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              {/* Next bid */}
+              {chitSummary.nextBidDate && (
+                <div className={`rounded-xl px-4 py-3 flex items-center justify-between border ${chitSummary.daysLeft !== null && chitSummary.daysLeft <= 30 && chitSummary.daysLeft >= 0 ? 'bg-red-50 border-red-200' : 'bg-indigo-50 border-indigo-100'}`}>
+                  <div>
+                    <p className="text-xs text-gray-500">Next bid date</p>
+                    <p className="text-sm font-bold text-gray-900">{formatDate(chitSummary.nextBidDate)}</p>
                   </div>
+                  {chitSummary.daysLeft !== null && chitSummary.daysLeft >= 0 && (
+                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${chitSummary.daysLeft <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-indigo-100 text-indigo-700'}`}>
+                      {chitSummary.daysLeft === 0 ? 'Today!' : `${chitSummary.daysLeft}d away`}
+                    </span>
+                  )}
                 </div>
-              ) : null}
+              )}
+
+              {/* Cycle progress */}
+              <div className="bg-gray-50 rounded-xl p-3 flex items-center justify-between text-xs text-gray-500">
+                <span>Cycles completed</span>
+                <span className="font-semibold text-gray-800">
+                  {chitPastCycles.length} of {chitSummary.totalCycles}
+                </span>
+              </div>
             </div>
           )}
         </div>
       )}
 
       {/* ════════════════════════════════════════════════════════════
-          MUTUAL FUNDS SECTION
+          MUTUAL FUNDS — untouched
       ════════════════════════════════════════════════════════════ */}
       {type === 'Mutual Funds' && (
         <>
@@ -813,7 +878,6 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
             </div>
           </Row>
 
-          {/* Current NAV + Fetch */}
           <div>
             <div className="flex items-center justify-between mb-1">
               <span className={lbl}>Current NAV (₹) *</span>
@@ -830,33 +894,22 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
               onChange={(e) => { setMfCurrentNav(e.target.value); clrErr('mfCurrentNav'); }}
               className={inp} />
             {mfFetchErr && <p className="text-xs text-red-500 mt-1">{mfFetchErr}</p>}
-            {mfNavDate && !mfFetchErr && (
-              <p className="text-xs text-gray-400 mt-1">Updated: {mfNavDate}</p>
-            )}
+            {mfNavDate && !mfFetchErr && <p className="text-xs text-gray-400 mt-1">Updated: {mfNavDate}</p>}
             <Err msg={errors.mfCurrentNav} />
           </div>
 
-          {/* Live preview */}
           {mfCurrentValue > 0 && (
             <div className="bg-purple-50 border border-purple-100 rounded-2xl p-4">
               <p className="text-xs font-semibold text-purple-600 mb-3 uppercase tracking-wide">Live Preview</p>
               <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <p className="text-xs text-purple-400">Units</p>
-                  <p className="text-sm font-bold text-purple-900">{mfUnits || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-purple-400">NAV at Buy</p>
-                  <p className="text-sm font-bold text-purple-900">₹{mfNavBuy || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-purple-400">Current NAV</p>
-                  <p className="text-sm font-bold text-purple-900">₹{mfCurrentNav || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-purple-400">Invested</p>
-                  <p className="text-sm font-bold text-purple-900">{formatCurrency(mfInvested)}</p>
-                </div>
+                <div><p className="text-xs text-purple-400">Units</p>
+                  <p className="text-sm font-bold text-purple-900">{mfUnits || '0'}</p></div>
+                <div><p className="text-xs text-purple-400">NAV at Buy</p>
+                  <p className="text-sm font-bold text-purple-900">₹{mfNavBuy || '0'}</p></div>
+                <div><p className="text-xs text-purple-400">Current NAV</p>
+                  <p className="text-sm font-bold text-purple-900">₹{mfCurrentNav || '0'}</p></div>
+                <div><p className="text-xs text-purple-400">Invested</p>
+                  <p className="text-sm font-bold text-purple-900">{formatCurrency(mfInvested)}</p></div>
                 <div className="col-span-2">
                   <p className="text-xs text-purple-400">Current Value</p>
                   <p className="text-sm font-bold text-purple-900">
@@ -873,7 +926,7 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
       )}
 
       {/* ════════════════════════════════════════════════════════════
-          GENERIC (Stocks, PPF, Gold, Other)
+          GENERIC (Stocks, PPF, Gold, Other) — untouched
       ════════════════════════════════════════════════════════════ */}
       {!['FD', 'Chit Funds', 'Mutual Funds'].includes(type) && (
         <>
@@ -906,7 +959,7 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
           ACTION BUTTONS
       ════════════════════════════════════════════════════════════ */}
       <div className="flex gap-3 pt-2">
-        {/* Left button */}
+        {/* Left: back or cancel */}
         {isChit && chitStep > 1 ? (
           <button type="button" onClick={chitBack}
             className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
@@ -919,7 +972,7 @@ export default function SavingsForm({ initial, onSubmit, onCancel, submitting = 
           </button>
         )}
 
-        {/* Right button */}
+        {/* Right: next or submit */}
         {isChit && chitStep < 3 ? (
           <button type="button" onClick={chitNext}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">

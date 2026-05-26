@@ -14,9 +14,17 @@ interface SavingsRow {
   amount_invested: string | number;
   current_value: string | number;
   start_date: string;
-  notes: string;
+  notes: string | null;
   created_at: string;
   updated_at: string;
+  // Chit-specific columns (null for non-chit)
+  chit_members: number | null;
+  chit_face_value: string | number | null;
+  chit_duration_months: number | null;
+  chit_bid_frequency: number | null;
+  chit_won_cycle: number | null;
+  chit_bid_received: string | number | null;
+  chit_is_foreman: boolean | null;
 }
 
 // ── Mappers ───────────────────────────────────────────────────────────────────
@@ -29,9 +37,16 @@ function rowToEntry(row: SavingsRow): SavingsEntry {
     amountInvested: Number(row.amount_invested),
     currentValue: Number(row.current_value),
     startDate: row.start_date,
-    notes: row.notes,
+    notes: row.notes ?? '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    chitMembers:        row.chit_members        !== null ? Number(row.chit_members)        : null,
+    chitFaceValue:      row.chit_face_value      !== null ? Number(row.chit_face_value)      : null,
+    chitDurationMonths: row.chit_duration_months !== null ? Number(row.chit_duration_months) : null,
+    chitBidFrequency:   row.chit_bid_frequency   !== null ? Number(row.chit_bid_frequency)   : null,
+    chitWonCycle:       row.chit_won_cycle        !== null ? Number(row.chit_won_cycle)        : null,
+    chitBidReceived:    row.chit_bid_received     !== null ? Number(row.chit_bid_received)     : null,
+    chitIsForeman:      row.chit_is_foreman       ?? null,
   };
 }
 
@@ -45,6 +60,13 @@ function inputToRow(input: SavingsInput) {
     current_value: input.currentValue,
     start_date: input.startDate,
     notes: input.notes,
+    chit_members:         input.chitMembers         ?? null,
+    chit_face_value:      input.chitFaceValue        ?? null,
+    chit_duration_months: input.chitDurationMonths   ?? null,
+    chit_bid_frequency:   input.chitBidFrequency     ?? null,
+    chit_won_cycle:       input.chitWonCycle          ?? null,
+    chit_bid_received:    input.chitBidReceived        ?? null,
+    chit_is_foreman:      input.chitIsForeman          ?? null,
   };
 }
 
@@ -52,7 +74,7 @@ function inputToRow(input: SavingsInput) {
 
 export function useSavings() {
   const [savings, setSavings] = useState<SavingsEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]  = useState(true);
   const { toast } = useToast();
 
   // ── Fetch all ──
@@ -71,13 +93,11 @@ export function useSavings() {
     setLoading(false);
   }, [toast]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  // ── Insert ──
+  // ── Insert — returns the new entry (truthy) or null (error) ──
   const add = useCallback(
-    async (input: SavingsInput): Promise<boolean> => {
+    async (input: SavingsInput): Promise<SavingsEntry | null> => {
       const { data, error } = await supabase
         .from('savings')
         .insert(inputToRow(input))
@@ -86,11 +106,12 @@ export function useSavings() {
 
       if (error) {
         toast(`Failed to add savings: ${error.message}`, 'error');
-        return false;
+        return null;
       }
-      setSavings((prev) => [rowToEntry(data as SavingsRow), ...prev]);
+      const entry = rowToEntry(data as SavingsRow);
+      setSavings((prev) => [entry, ...prev]);
       toast('Savings entry added', 'success');
-      return true;
+      return entry;
     },
     [toast],
   );
@@ -122,7 +143,6 @@ export function useSavings() {
   const remove = useCallback(
     async (id: string): Promise<boolean> => {
       const { error } = await supabase.from('savings').delete().eq('id', id);
-
       if (error) {
         toast(`Failed to delete: ${error.message}`, 'error');
         return false;
@@ -136,19 +156,9 @@ export function useSavings() {
 
   // ── Derived totals ──
   const totalInvested = savings.reduce((s, e) => s + e.amountInvested, 0);
-  const totalCurrent = savings.reduce((s, e) => s + e.currentValue, 0);
-  const totalGain = totalCurrent - totalInvested;
-  const gainPct = totalInvested > 0 ? (totalGain / totalInvested) * 100 : 0;
+  const totalCurrent  = savings.reduce((s, e) => s + e.currentValue,   0);
+  const totalGain     = totalCurrent - totalInvested;
+  const gainPct       = totalInvested > 0 ? (totalGain / totalInvested) * 100 : 0;
 
-  return {
-    savings,
-    loading,
-    add,
-    update,
-    remove,
-    totalInvested,
-    totalCurrent,
-    totalGain,
-    gainPct,
-  };
+  return { savings, loading, add, update, remove, totalInvested, totalCurrent, totalGain, gainPct };
 }

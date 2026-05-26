@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import type { SavingsEntry } from '@/lib/types';
+import type { SavingsEntry, ChitCycle, ChitCycleInput } from '@/lib/types';
 import { useSavings } from '@/hooks/useSavings';
+import { useChitCycles } from '@/hooks/useChitCycles';
 import { formatCurrency } from '@/lib/utils';
 import Modal from '@/components/ui/Modal';
 import SavingsForm from './SavingsForm';
@@ -12,19 +13,61 @@ import SavingsBreakdownChart from './SavingsBreakdownChart';
 export default function SavingsClient() {
   const { savings, loading, add, update, remove, totalInvested, totalCurrent, totalGain, gainPct } =
     useSavings();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<SavingsEntry | null>(null);
+  const { addCycles, replaceCycles, fetchCycles } = useChitCycles();
+
+  const [modalOpen, setModalOpen]   = useState(false);
+  const [editing, setEditing]       = useState<SavingsEntry | null>(null);
+  const [editingCycles, setEditingCycles] = useState<ChitCycle[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
-  const openAdd = () => { setEditing(null); setModalOpen(true); };
-  const openEdit = (s: SavingsEntry) => { setEditing(s); setModalOpen(true); };
-  const closeModal = () => { setModalOpen(false); setEditing(null); };
+  const openAdd = () => { setEditing(null); setEditingCycles([]); setModalOpen(true); };
 
+  const openEdit = async (s: SavingsEntry) => {
+    setEditing(s);
+    if (s.type === 'Chit Funds') {
+      const cycles = await fetchCycles(s.id);
+      setEditingCycles(cycles);
+    } else {
+      setEditingCycles([]);
+    }
+    setModalOpen(true);
+  };
+
+  const closeModal = () => { setModalOpen(false); setEditing(null); setEditingCycles([]); };
+
+  // ── Standard submit (FD, MF, Generic) ──
   const handleSubmit = async (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
     setSubmitting(true);
-    const ok = editing ? await update(editing.id, data) : await add(data);
+    if (editing) {
+      const ok = await update(editing.id, data);
+      if (ok) closeModal();
+    } else {
+      const entry = await add(data);
+      if (entry) closeModal();
+    }
     setSubmitting(false);
-    if (ok) closeModal();
+  };
+
+  // ── Chit submit (saves savings row + cycle history) ──
+  const handleChitSubmit = async (
+    data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>,
+    cycles: ChitCycleInput[],
+  ) => {
+    setSubmitting(true);
+    if (editing) {
+      const ok = await update(editing.id, data);
+      if (ok) {
+        await replaceCycles(editing.id, cycles);
+        closeModal();
+      }
+    } else {
+      const entry = await add(data);
+      if (entry) {
+        await addCycles(entry.id, cycles);
+        closeModal();
+      }
+    }
+    setSubmitting(false);
   };
 
   if (loading) {
@@ -92,7 +135,9 @@ export default function SavingsClient() {
       >
         <SavingsForm
           initial={editing}
+          initialCycles={editingCycles}
           onSubmit={handleSubmit}
+          onChitSubmit={handleChitSubmit}
           onCancel={closeModal}
           submitting={submitting}
         />

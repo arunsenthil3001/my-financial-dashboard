@@ -39,6 +39,39 @@ export interface SavingsEntry {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  // Chit-fund specific (null for all other types)
+  chitMembers: number | null;
+  chitFaceValue: number | null;
+  chitDurationMonths: number | null;
+  chitBidFrequency: number | null;
+  chitWonCycle: number | null;
+  chitBidReceived: number | null;
+  chitIsForeman: boolean | null;
+}
+
+// ─── Chit Cycles ──────────────────────────────────────────────────────────────
+
+export interface ChitCycle {
+  id: string;
+  savingId: string;
+  cycleNumber: number;
+  amountPaid: number;
+  commissionReceived: number | null;
+  totalCommission: number | null;
+  userWon: boolean;
+  bidAmountReceived: number | null;
+  cycleDate: string | null;
+  createdAt: string;
+}
+
+export interface ChitCycleInput {
+  cycleNumber: number;
+  amountPaid: number;
+  commissionReceived: number | null;
+  totalCommission: number | null;
+  userWon: boolean;
+  bidAmountReceived: number | null;
+  cycleDate: string | null;
 }
 
 // ─── Expenses ─────────────────────────────────────────────────────────────────

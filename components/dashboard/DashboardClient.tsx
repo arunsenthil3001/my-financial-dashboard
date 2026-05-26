@@ -4,14 +4,14 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSavings } from '@/hooks/useSavings';
 import { useExpenses } from '@/hooks/useExpenses';
-import { formatCurrency, formatDate, formatShortDate, daysUntil } from '@/lib/utils';
+import { formatCurrency, formatDate, formatShortDate, daysUntil, addMonths } from '@/lib/utils';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
 import { EXPENSE_CATEGORY_COLORS, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
 import {
-  parseFDMeta,   fdMaturityDate,
-  parseChitMeta, chitNextBidDate, calcChitMonthlyPayment,
+  parseFDMeta, fdMaturityDate,
   parseMFMeta,
 } from '@/lib/notesParsers';
+import { elapsedCycles } from '@/lib/chitFundCalc';
 import Modal from '@/components/ui/Modal';
 import ExpenseForm from '@/components/expenses/ExpenseForm';
 import type { ExpenseEntry } from '@/lib/types';
@@ -34,13 +34,20 @@ export default function DashboardClient() {
       return { id: s.id, name: s.name, type: 'FD' as const, meta, maturity, days, gainPct };
     }
     if (s.type === 'Chit Funds') {
-      const meta = parseChitMeta(s.notes);
-      if (!meta) return null;
-      const nextBid = chitNextBidDate(s.startDate, meta);
-      const days = nextBid ? daysUntil(nextBid) : null;
-      const monthlyPmt = calcChitMonthlyPayment(meta);
-      const status = meta.is_foreman ? 'Foreman ✓' : meta.user_has_taken_bid ? 'Bid taken ✓' : 'Eligible to bid';
-      return { id: s.id, name: s.name, type: 'Chit Funds' as const, meta, nextBid, days, monthlyPmt, status };
+      // New-schema chit (dedicated columns)
+      if (s.chitMembers && s.chitBidFrequency) {
+        const elapsed     = elapsedCycles(s.startDate, s.chitBidFrequency);
+        const nextBid     = addMonths(s.startDate, (elapsed + 1) * s.chitBidFrequency);
+        const days        = daysUntil(nextBid);
+        const hasWon      = (s.chitIsForeman ?? false) || s.chitWonCycle !== null;
+        const bidReceived = s.chitBidReceived ?? 0;
+        const totalCommitted = s.amountInvested + (Math.max(0, Math.round((s.chitDurationMonths ?? 0) / s.chitBidFrequency) - elapsed) * (s.chitFaceValue ?? 0));
+        const gainPct = hasWon && totalCommitted > 0
+          ? ((bidReceived - totalCommitted) / totalCommitted) * 100 : null;
+        return { id: s.id, name: s.name, type: 'Chit Funds' as const, nextBid, days, hasWon, gainPct };
+      }
+      // Legacy JSON-notes chit — skip highlight
+      return null;
     }
     if (s.type === 'Mutual Funds') {
       const meta = parseMFMeta(s.notes);
@@ -214,25 +221,25 @@ export default function DashboardClient() {
             }
 
             if (h.type === 'Chit Funds') {
-              const urgent = h.days !== null && h.days >= 0 && h.days <= 7;
+              const urgent = h.days !== null && h.days >= 0 && h.days <= 30;
               return (
-                <div key={h.id} className={`bg-white rounded-xl border shadow-sm px-4 py-3 ${urgent ? 'border-red-200' : 'border-gray-100'}`}>
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <div className="flex items-center gap-2 min-w-0">
+                <div key={h.id} className={`bg-white rounded-xl border shadow-sm px-4 py-3 flex items-center justify-between gap-3 ${urgent ? 'border-red-200' : 'border-gray-100'}`}>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
                       <span className="text-base">🫙</span>
                       <p className="text-sm font-semibold text-gray-900 truncate">{h.name}</p>
                     </div>
-                    {urgent && (
-                      <span className="shrink-0 text-xs font-semibold text-red-700 bg-red-100 px-2 py-0.5 rounded-full animate-pulse">
-                        🔴 Bid in {h.days}d
-                      </span>
-                    )}
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      {h.hasWon ? 'Bid won ✓' : 'Eligible to bid'}
+                      {h.nextBid && <span className="ml-2 text-gray-500">· Next bid: {formatDate(h.nextBid)}</span>}
+                      {urgent && h.days !== null && <span className="text-red-600 font-semibold ml-1">({h.days}d left)</span>}
+                    </p>
                   </div>
-                  <div className="flex flex-wrap gap-x-3 text-xs text-gray-500">
-                    <span>{h.status}</span>
-                    {h.nextBid && <span>Next bid: {formatDate(h.nextBid)}</span>}
-                    <span>Monthly: {formatCurrency(h.monthlyPmt)}</span>
-                  </div>
+                  <span className={`text-sm font-bold shrink-0 ${h.gainPct !== null ? (h.gainPct >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
+                    {h.gainPct !== null
+                      ? `${h.gainPct >= 0 ? '+' : ''}${h.gainPct.toFixed(1)}%`
+                      : 'Ongoing'}
+                  </span>
                 </div>
               );
             }
