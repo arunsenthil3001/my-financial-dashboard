@@ -69,8 +69,8 @@ export default function DashboardClient() {
   // ── Monthly scorecard ──
   const monthlyScorecard = useMemo(() => {
     const salary = currentSalary
-      ? (earningCurrency === homeCurrency ? currentSalary.grossAmount
-        : currentSalary.grossAmount * (liveRate ?? 1))
+      ? (earningCurrency === homeCurrency ? currentSalary.netAmount
+        : currentSalary.netAmount * (liveRate ?? 1))
       : null;
 
     // This month's expenses in home currency

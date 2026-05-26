@@ -78,7 +78,7 @@ interface SalaryFormProps {
 }
 
 function SalaryForm({ defaultCurrency, onSubmit, onCancel, submitting }: SalaryFormProps) {
-  const [grossAmount, setGrossAmount] = useState('');
+  const [netAmount, setNetAmount] = useState('');
   const [currency, setCurrency]       = useState(defaultCurrency);
   const [effectiveFrom, setEffectiveFrom] = useState(todayISO());
   const [notes, setNotes]             = useState('');
@@ -86,7 +86,7 @@ function SalaryForm({ defaultCurrency, onSubmit, onCancel, submitting }: SalaryF
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await onSubmit({
-      grossAmount: Number(grossAmount),
+      netAmount: Number(netAmount),
       currency,
       effectiveFrom,
       effectiveTo: null,
@@ -102,7 +102,7 @@ function SalaryForm({ defaultCurrency, onSubmit, onCancel, submitting }: SalaryF
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={labelCls}>Gross Amount</label>
-          <input type="number" step="0.01" value={grossAmount} onChange={e => setGrossAmount(e.target.value)}
+          <input type="number" step="0.01" value={netAmount} onChange={e => setNetAmount(e.target.value)}
             placeholder="0.00" required className={inputCls} />
         </div>
         <div>
@@ -235,7 +235,7 @@ export default function SettingsClient() {
           <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
             <div className="flex-1">
               <p className="text-base font-bold text-gray-900">
-                {formatAmount(currentSalary.grossAmount, currentSalary.currency)}
+                {formatAmount(currentSalary.netAmount, currentSalary.currency)}
               </p>
               <p className="text-xs text-gray-400">
                 per month · effective {formatDate(currentSalary.effectiveFrom)}
@@ -257,7 +257,7 @@ export default function SettingsClient() {
               <div key={s.id} className="flex items-start justify-between gap-3 py-2 border-b border-gray-50 last:border-0">
                 <div>
                   <p className="text-sm font-semibold text-gray-800">
-                    {formatAmount(s.grossAmount, s.currency)}
+                    {formatAmount(s.netAmount, s.currency)}
                     {s.effectiveTo === null && (
                       <span className="ml-2 text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-normal">Current</span>
                     )}

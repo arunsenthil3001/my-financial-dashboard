@@ -8,7 +8,7 @@ import { todayISO } from '@/lib/utils';
 
 interface SalaryRow {
   id: string;
-  gross_amount: string | number;
+  net_amount: string | number;
   currency: string;
   effective_from: string;
   effective_to: string | null;
@@ -19,7 +19,7 @@ interface SalaryRow {
 function rowToEntry(row: SalaryRow): SalaryEntry {
   return {
     id: row.id,
-    grossAmount: Number(row.gross_amount),
+    netAmount: Number(row.net_amount),
     currency: row.currency,
     effectiveFrom: row.effective_from,
     effectiveTo: row.effective_to,
@@ -75,7 +75,7 @@ export function useSalary() {
       const { data, error } = await supabase
         .from('salary_history')
         .insert({
-          gross_amount: input.grossAmount,
+          net_amount: input.netAmount,
           currency: input.currency,
           effective_from: input.effectiveFrom,
           effective_to: null,

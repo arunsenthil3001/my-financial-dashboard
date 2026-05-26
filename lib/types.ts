@@ -146,7 +146,7 @@ export interface UserSettings {
 
 export interface SalaryEntry {
   id: string;
-  grossAmount: number;
+  netAmount: number;
   currency: string;
   effectiveFrom: string;   // ISO date
   effectiveTo: string | null;
