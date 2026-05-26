@@ -4,7 +4,11 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSavings } from '@/hooks/useSavings';
 import { useExpenses } from '@/hooks/useExpenses';
-import { formatCurrency, formatDate, formatShortDate, daysUntil, addMonths } from '@/lib/utils';
+import { useRemittances } from '@/hooks/useRemittances';
+import { useSalary } from '@/hooks/useSalary';
+import { useCurrency } from '@/lib/currencyContext';
+import { formatCurrency, formatDate, formatShortDate, daysUntil, addMonths, isThisMonth } from '@/lib/utils';
+import { formatAmount } from '@/lib/currencies';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
 import { EXPENSE_CATEGORY_COLORS, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
 import {
@@ -15,10 +19,15 @@ import { elapsedCycles } from '@/lib/chitFundCalc';
 import Modal from '@/components/ui/Modal';
 import ExpenseForm from '@/components/expenses/ExpenseForm';
 import type { ExpenseEntry } from '@/lib/types';
+import type { ExpenseInput } from '@/hooks/useExpenses';
 
 export default function DashboardClient() {
   const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct } = useSavings();
   const { expenses, loading: expensesLoading, add, monthlyTotal, monthlyTrend } = useExpenses();
+  const { remittances, loading: remittancesLoading } = useRemittances();
+  const { current: currentSalary } = useSalary();
+  const { toDisplay, homeCurrency, earningCurrency, liveRate } = useCurrency();
+
   const [quickAdd, setQuickAdd] = useState(false);
   const [quickSubmitting, setQuickSubmitting] = useState(false);
 
@@ -34,7 +43,6 @@ export default function DashboardClient() {
       return { id: s.id, name: s.name, type: 'FD' as const, meta, maturity, days, gainPct };
     }
     if (s.type === 'Chit Funds') {
-      // New-schema chit (dedicated columns)
       if (s.chitMembers && s.chitBidFrequency) {
         const elapsed     = elapsedCycles(s.startDate, s.chitBidFrequency);
         const nextBid     = addMonths(s.startDate, (elapsed + 1) * s.chitBidFrequency);
@@ -46,7 +54,6 @@ export default function DashboardClient() {
           ? ((bidReceived - totalCommitted) / totalCommitted) * 100 : null;
         return { id: s.id, name: s.name, type: 'Chit Funds' as const, nextBid, days, hasWon, gainPct };
       }
-      // Legacy JSON-notes chit — skip highlight
       return null;
     }
     if (s.type === 'Mutual Funds') {
@@ -59,15 +66,61 @@ export default function DashboardClient() {
     return null;
   }).filter(Boolean), [savings]);
 
+  // ── Monthly scorecard ──
+  const monthlyScorecard = useMemo(() => {
+    const salary = currentSalary
+      ? (earningCurrency === homeCurrency ? currentSalary.grossAmount
+        : currentSalary.grossAmount * (liveRate ?? 1))
+      : null;
+
+    // This month's expenses in home currency
+    const thisMonthExpenses = expenses.filter((e) => isThisMonth(e.date));
+    const homeExpenses  = thisMonthExpenses.filter((e) => e.currency === homeCurrency)
+      .reduce((s, e) => s + e.homeAmount, 0);
+    const abroadExpenses = thisMonthExpenses.filter((e) => e.currency !== homeCurrency)
+      .reduce((s, e) => s + e.homeAmount, 0);
+
+    // This month's remittances (to-home transfers)
+    const thisMonthRemitted = remittances
+      .filter((r) => isThisMonth(r.transferDate) && r.toCurrency === homeCurrency)
+      .reduce((s, r) => s + r.toAmount, 0);
+
+    // This month's savings (current savings value added this month — approximate: investments)
+    const invested = savings.reduce((s, sv) => s + sv.amountInvested, 0);
+
+    const idle = salary !== null
+      ? Math.max(0, salary - homeExpenses - abroadExpenses - thisMonthRemitted)
+      : null;
+
+    const savingsRate = salary && salary > 0
+      ? ((thisMonthRemitted / salary) * 100) : null;
+
+    return { salary, homeExpenses, abroadExpenses, thisMonthRemitted, invested, idle, savingsRate };
+  }, [currentSalary, expenses, remittances, savings, homeCurrency, earningCurrency, liveRate]);
+
+  // ── Unallocated pool (money remitted but not linked to savings/expenses) ──
+  const unallocatedPool = useMemo(() => {
+    const totalRemittedHome = remittances
+      .filter((r) => r.toCurrency === homeCurrency)
+      .reduce((s, r) => s + r.toAmount, 0);
+    const linkedExpenses = expenses
+      .filter((e) => e.remittanceId !== null)
+      .reduce((s, e) => s + e.homeAmount, 0);
+    const linkedSavings = savings
+      .filter((sv) => sv.remittanceId !== null)
+      .reduce((s, sv) => s + sv.amountInvested, 0);
+    return Math.max(0, totalRemittedHome - linkedExpenses - linkedSavings);
+  }, [remittances, expenses, savings, homeCurrency]);
+
   const handleQuickAdd = async (data: Omit<ExpenseEntry, 'id' | 'createdAt'>) => {
     setQuickSubmitting(true);
-    const ok = await add(data);
+    const ok = await add(data as ExpenseInput);
     setQuickSubmitting(false);
     if (ok) setQuickAdd(false);
   };
 
   // ── Loading state (after all hooks) ──
-  if (savingsLoading || expensesLoading) {
+  if (savingsLoading || expensesLoading || remittancesLoading) {
     return (
       <div className="flex items-center justify-center h-60">
         <div className="w-6 h-6 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
@@ -89,12 +142,10 @@ export default function DashboardClient() {
     return acc;
   }, []);
 
-  // Greeting
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const todayLabel = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  // This month in trend
   const lastMonthData = monthlyTrend[monthlyTrend.length - 2];
   const spendChange = lastMonthData?.total > 0
     ? ((monthlyTotal - lastMonthData.total) / lastMonthData.total) * 100
@@ -110,25 +161,19 @@ export default function DashboardClient() {
 
       {/* ── Primary cards ── */}
       <div className="grid grid-cols-2 gap-4">
-        {/* Total savings */}
-        <Link
-          href="/savings"
-          className="col-span-1 bg-indigo-600 rounded-2xl p-5 shadow-md hover:bg-indigo-700 transition-colors cursor-pointer"
-        >
+        <Link href="/savings"
+          className="col-span-1 bg-indigo-600 rounded-2xl p-5 shadow-md hover:bg-indigo-700 transition-colors cursor-pointer">
           <p className="text-indigo-200 text-xs font-medium mb-1">Total Savings</p>
-          <p className="text-white text-xl font-bold leading-tight">{formatCurrency(totalCurrent)}</p>
+          <p className="text-white text-xl font-bold leading-tight">{toDisplay(totalCurrent)}</p>
           <p className={`text-xs mt-1.5 font-medium ${isPositive ? 'text-indigo-200' : 'text-red-300'}`}>
             {isPositive ? '▲' : '▼'} {Math.abs(gainPct).toFixed(1)}% overall returns
           </p>
         </Link>
 
-        {/* Monthly expenses */}
-        <Link
-          href="/expenses"
-          className="col-span-1 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-        >
+        <Link href="/expenses"
+          className="col-span-1 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer">
           <p className="text-gray-400 text-xs font-medium mb-1">This Month</p>
-          <p className="text-gray-900 text-xl font-bold leading-tight">{formatCurrency(monthlyTotal)}</p>
+          <p className="text-gray-900 text-xl font-bold leading-tight">{toDisplay(monthlyTotal)}</p>
           {spendChange !== null && (
             <p className={`text-xs mt-1.5 font-medium ${spendChange > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
               {spendChange > 0 ? '▲' : '▼'} {Math.abs(spendChange).toFixed(0)}% vs last month
@@ -141,45 +186,106 @@ export default function DashboardClient() {
       <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-400 mb-0.5">Invested Capital</p>
-          <p className="text-lg font-bold text-gray-900">{formatCurrency(totalInvested)}</p>
+          <p className="text-lg font-bold text-gray-900">{toDisplay(totalInvested)}</p>
         </div>
         <div className="text-right">
           <p className="text-xs text-gray-400 mb-0.5">Total Gain / Loss</p>
           <p className={`text-lg font-bold ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
-            {isPositive ? '+' : ''}{formatCurrency(totalGain)}
+            {isPositive ? '+' : ''}{toDisplay(totalGain)}
           </p>
         </div>
       </div>
+
+      {/* ── Monthly Scorecard ── */}
+      {(monthlyScorecard.salary !== null || monthlyScorecard.thisMonthRemitted > 0) && (
+        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
+            <span className="text-xs text-gray-400">
+              {new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {monthlyScorecard.salary !== null && (
+              <div className="bg-indigo-50 rounded-xl p-3">
+                <p className="text-xs text-indigo-500 mb-0.5">Salary</p>
+                <p className="text-sm font-bold text-indigo-900">{toDisplay(monthlyScorecard.salary)}</p>
+              </div>
+            )}
+            {monthlyScorecard.abroadExpenses > 0 && (
+              <div className="bg-orange-50 rounded-xl p-3">
+                <p className="text-xs text-orange-500 mb-0.5">Abroad Expenses</p>
+                <p className="text-sm font-bold text-orange-900">{toDisplay(monthlyScorecard.abroadExpenses)}</p>
+              </div>
+            )}
+            {monthlyScorecard.thisMonthRemitted > 0 && (
+              <div className="bg-emerald-50 rounded-xl p-3">
+                <p className="text-xs text-emerald-500 mb-0.5">Remitted Home</p>
+                <p className="text-sm font-bold text-emerald-900">{toDisplay(monthlyScorecard.thisMonthRemitted)}</p>
+              </div>
+            )}
+            {monthlyScorecard.homeExpenses > 0 && (
+              <div className="bg-red-50 rounded-xl p-3">
+                <p className="text-xs text-red-400 mb-0.5">Home Expenses</p>
+                <p className="text-sm font-bold text-red-800">{toDisplay(monthlyScorecard.homeExpenses)}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Savings rate bar */}
+          {monthlyScorecard.savingsRate !== null && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs text-gray-500">Remittance rate</p>
+                <p className="text-xs font-bold text-indigo-700">{monthlyScorecard.savingsRate.toFixed(1)}%</p>
+              </div>
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-indigo-500 rounded-full transition-all"
+                  style={{ width: `${Math.min(100, monthlyScorecard.savingsRate)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Unallocated Pool ── */}
+      {unallocatedPool > 0 && (
+        <Link href="/remittances"
+          className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm hover:bg-amber-100 transition-colors">
+          <div>
+            <p className="text-xs font-semibold text-amber-700 mb-0.5">💰 Unallocated Pool</p>
+            <p className="text-xs text-amber-600">Money received but not yet linked to savings or expenses</p>
+          </div>
+          <div className="text-right shrink-0 ml-3">
+            <p className="text-base font-bold text-amber-800">{toDisplay(unallocatedPool)}</p>
+            <p className="text-xs text-amber-600">Allocate →</p>
+          </div>
+        </Link>
+      )}
 
       {/* ── Savings breakdown ── */}
       {buckets.length > 0 && (
         <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-gray-700">Savings Breakdown</h2>
-            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">
-              View all →
-            </Link>
+            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">View all →</Link>
           </div>
-          {/* Stacked bar */}
           <div className="flex h-3 rounded-full overflow-hidden gap-0.5 mb-3">
             {buckets.map((b) => (
-              <div
-                key={b.type}
-                style={{
-                  flex: b.value / totalCurrent,
-                  backgroundColor: b.color,
-                }}
-                title={`${b.type}: ${formatCurrency(b.value)}`}
-              />
+              <div key={b.type}
+                style={{ flex: b.value / totalCurrent, backgroundColor: b.color }}
+                title={`${b.type}: ${toDisplay(b.value)}`} />
             ))}
           </div>
-          {/* Legend */}
           <div className="flex flex-wrap gap-x-4 gap-y-2">
             {buckets.map((b) => (
               <div key={b.type} className="flex items-center gap-1.5">
                 <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: b.color }} />
                 <span className="text-xs text-gray-500">
-                  {b.type} · <span className="font-medium text-gray-700">{formatCurrency(b.value)}</span>
+                  {b.type} · <span className="font-medium text-gray-700">{toDisplay(b.value)}</span>
                 </span>
               </div>
             ))}
@@ -192,9 +298,7 @@ export default function DashboardClient() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-700">Portfolio Highlights</h2>
-            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">
-              Manage →
-            </Link>
+            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">Manage →</Link>
           </div>
           {savingsHighlights.map((h) => {
             if (!h) return null;
@@ -236,9 +340,7 @@ export default function DashboardClient() {
                     </p>
                   </div>
                   <span className={`text-sm font-bold shrink-0 ${h.gainPct !== null ? (h.gainPct >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
-                    {h.gainPct !== null
-                      ? `${h.gainPct >= 0 ? '+' : ''}${h.gainPct.toFixed(1)}%`
-                      : 'Ongoing'}
+                    {h.gainPct !== null ? `${h.gainPct >= 0 ? '+' : ''}${h.gainPct.toFixed(1)}%` : 'Ongoing'}
                   </span>
                 </div>
               );
@@ -273,9 +375,7 @@ export default function DashboardClient() {
       <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-gray-700">Recent Expenses</h2>
-          <Link href="/expenses" className="text-xs text-indigo-600 font-medium hover:underline">
-            View all →
-          </Link>
+          <Link href="/expenses" className="text-xs text-indigo-600 font-medium hover:underline">View all →</Link>
         </div>
 
         {recentExpenses.length === 0 ? (
@@ -284,10 +384,8 @@ export default function DashboardClient() {
           <div className="space-y-2">
             {recentExpenses.map((e) => (
               <div key={e.id} className="flex items-center gap-3">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0"
-                  style={{ backgroundColor: EXPENSE_CATEGORY_COLORS[e.category] + '1A' }}
-                >
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0"
+                  style={{ backgroundColor: EXPENSE_CATEGORY_COLORS[e.category] + '1A' }}>
                   {EXPENSE_CATEGORY_ICONS[e.category]}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -295,7 +393,7 @@ export default function DashboardClient() {
                   {e.notes && <p className="text-xs text-gray-400 truncate">{e.notes}</p>}
                 </div>
                 <div className="text-right shrink-0">
-                  <p className="text-sm font-semibold text-gray-900">{formatCurrency(e.amount)}</p>
+                  <p className="text-sm font-semibold text-gray-900">{toDisplay(e.homeAmount)}</p>
                   <p className="text-xs text-gray-400">{formatShortDate(e.date)}</p>
                 </div>
               </div>

@@ -25,6 +25,8 @@ interface SavingsRow {
   chit_won_cycle: number | null;
   chit_bid_received: string | number | null;
   chit_is_foreman: boolean | null;
+  // Multi-currency
+  remittance_id: string | null;
 }
 
 // ── Mappers ───────────────────────────────────────────────────────────────────
@@ -47,6 +49,7 @@ function rowToEntry(row: SavingsRow): SavingsEntry {
     chitWonCycle:       row.chit_won_cycle        !== null ? Number(row.chit_won_cycle)        : null,
     chitBidReceived:    row.chit_bid_received     !== null ? Number(row.chit_bid_received)     : null,
     chitIsForeman:      row.chit_is_foreman       ?? null,
+    remittanceId:       row.remittance_id          ?? null,
   };
 }
 
@@ -67,6 +70,7 @@ function inputToRow(input: SavingsInput) {
     chit_won_cycle:       input.chitWonCycle          ?? null,
     chit_bid_received:    input.chitBidReceived        ?? null,
     chit_is_foreman:      input.chitIsForeman          ?? null,
+    remittance_id:        input.remittanceId            ?? null,
   };
 }
 

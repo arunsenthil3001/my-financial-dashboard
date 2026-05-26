@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useCurrency } from '@/lib/currencyContext';
+import { CURRENCIES } from '@/lib/currencies';
 
 const tabs = [
   {
@@ -31,7 +33,56 @@ const tabs = [
       </svg>
     ),
   },
+  {
+    href: '/remittances',
+    label: 'Transfers',
+    icon: (active: boolean) => (
+      <svg className="w-6 h-6" fill={active ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={active ? 0 : 1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    ),
+  },
+  {
+    href: '/settings',
+    label: 'Settings',
+    icon: (active: boolean) => (
+      <svg className="w-6 h-6" fill={active ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={active ? 0 : 1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    ),
+  },
 ];
+
+// ── Currency toggle pill ──────────────────────────────────────────────────────
+
+function CurrencyToggle() {
+  const { homeCurrency, earningCurrency, display, toggle, liveRate } = useCurrency();
+
+  // Only show toggle if currencies differ
+  if (homeCurrency === earningCurrency) return null;
+
+  const activeCode  = display === 'home' ? homeCurrency : earningCurrency;
+  const activeCur   = CURRENCIES[activeCode];
+  const flag        = activeCur?.flag ?? '';
+  const symbol      = activeCur?.symbol ?? activeCode;
+
+  return (
+    <button
+      onClick={toggle}
+      title={liveRate ? `1 ${earningCurrency} = ${liveRate.toFixed(4)} ${homeCurrency}` : 'Toggle currency'}
+      className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors select-none"
+    >
+      <span>{flag}</span>
+      <span>{activeCode}</span>
+      <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    </button>
+  );
+}
+
+// ── Main Navigation ───────────────────────────────────────────────────────────
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -63,14 +114,18 @@ export default function Navigation() {
               );
             })}
           </nav>
+          <CurrencyToggle />
         </div>
       </header>
 
-      {/* ── Mobile top bar (just logo) ── */}
+      {/* ── Mobile top bar ── */}
       <header className="sm:hidden sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
-        <div className="flex items-center gap-2 px-4 h-13 py-3">
-          <span className="text-lg">💰</span>
-          <span className="font-bold text-gray-900 text-sm tracking-tight">My Financial Dashboard</span>
+        <div className="flex items-center justify-between px-4 h-13 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">💰</span>
+            <span className="font-bold text-gray-900 text-sm tracking-tight">My Financial Dashboard</span>
+          </div>
+          <CurrencyToggle />
         </div>
       </header>
 

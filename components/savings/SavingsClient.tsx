@@ -4,8 +4,10 @@ import { useState } from 'react';
 import type { SavingsEntry, ChitCycle, ChitCycleInput } from '@/lib/types';
 import { useSavings } from '@/hooks/useSavings';
 import { useChitCycles } from '@/hooks/useChitCycles';
-import { formatCurrency } from '@/lib/utils';
+import { useRemittances } from '@/hooks/useRemittances';
+import { useCurrency } from '@/lib/currencyContext';
 import Modal from '@/components/ui/Modal';
+
 import SavingsForm from './SavingsForm';
 import SavingsList from './SavingsList';
 import SavingsBreakdownChart from './SavingsBreakdownChart';
@@ -14,6 +16,8 @@ export default function SavingsClient() {
   const { savings, loading, add, update, remove, totalInvested, totalCurrent, totalGain, gainPct } =
     useSavings();
   const { addCycles, replaceCycles, fetchCycles } = useChitCycles();
+  const { remittances } = useRemittances();
+  const { toDisplay } = useCurrency();
 
   const [modalOpen, setModalOpen]   = useState(false);
   const [editing, setEditing]       = useState<SavingsEntry | null>(null);
@@ -86,18 +90,18 @@ export default function SavingsClient() {
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <p className="text-xs text-gray-400 mb-1">Invested</p>
-          <p className="text-base font-bold text-gray-900 truncate">{formatCurrency(totalInvested)}</p>
+          <p className="text-base font-bold text-gray-900 truncate">{toDisplay(totalInvested)}</p>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <p className="text-xs text-gray-400 mb-1">Current Value</p>
-          <p className="text-base font-bold text-gray-900 truncate">{formatCurrency(totalCurrent)}</p>
+          <p className="text-base font-bold text-gray-900 truncate">{toDisplay(totalCurrent)}</p>
         </div>
         <div className={`rounded-2xl border shadow-sm p-4 ${isPositive ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
           <p className={`text-xs mb-1 ${isPositive ? 'text-emerald-600' : 'text-red-400'}`}>
             {isPositive ? 'Total Gain' : 'Total Loss'}
           </p>
           <p className={`text-base font-bold truncate ${isPositive ? 'text-emerald-700' : 'text-red-600'}`}>
-            {isPositive ? '+' : ''}{formatCurrency(totalGain)}
+            {isPositive ? '+' : ''}{toDisplay(totalGain)}
           </p>
           <p className={`text-xs font-medium ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
             {isPositive ? '+' : ''}{gainPct.toFixed(1)}%
@@ -136,6 +140,7 @@ export default function SavingsClient() {
         <SavingsForm
           initial={editing}
           initialCycles={editingCycles}
+          remittances={remittances}
           onSubmit={handleSubmit}
           onChitSubmit={handleChitSubmit}
           onCancel={closeModal}

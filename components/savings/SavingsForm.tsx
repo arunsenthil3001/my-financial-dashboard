@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { SavingsEntry, SavingsType, ChitCycle, ChitCycleInput } from '@/lib/types';
+import type { SavingsEntry, SavingsType, ChitCycle, ChitCycleInput, RemittanceEntry } from '@/lib/types';
 import { SAVINGS_TYPES } from '@/lib/types';
 import { formatCurrency, formatDate, todayISO, addMonths, daysUntil } from '@/lib/utils';
+import { formatAmount } from '@/lib/currencies';
 import {
   calcFDValue, fdMaturityDate,
   type CompoundFrequency,
@@ -76,6 +77,7 @@ interface PastCycleState {
 interface Props {
   initial?: SavingsEntry | null;
   initialCycles?: ChitCycle[];
+  remittances?: RemittanceEntry[];
   onSubmit: (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onChitSubmit?: (
     data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>,
@@ -88,13 +90,14 @@ interface Props {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function SavingsForm({
-  initial, initialCycles, onSubmit, onChitSubmit, onCancel, submitting = false,
+  initial, initialCycles, remittances = [], onSubmit, onChitSubmit, onCancel, submitting = false,
 }: Props) {
   // ── Common ──
-  const [name, setName]           = useState('');
-  const [type, setType]           = useState<SavingsType>('FD');
-  const [startDate, setStartDate] = useState(todayISO());
-  const [errors, setErrors]       = useState<Record<string, string>>({});
+  const [name, setName]                 = useState('');
+  const [type, setType]                 = useState<SavingsType>('FD');
+  const [startDate, setStartDate]       = useState(todayISO());
+  const [remittanceId, setRemittanceId] = useState<string>(initial?.remittanceId ?? '');
+  const [errors, setErrors]             = useState<Record<string, string>>({});
 
   // ── Generic (Stocks, PPF, Gold, Other) ──
   const [gInvested, setGInvested] = useState('');
@@ -133,6 +136,7 @@ export default function SavingsForm({
     setChitStep(1);
     if (!initial) {
       setName(''); setType('FD'); setStartDate(todayISO());
+      setRemittanceId('');
       setGInvested(''); setGCurrent(''); setGNotes('');
       setFdPrincipal(''); setFdRate(''); setFdTenure(''); setFdFreq('quarterly');
       setChitMembers(''); setChitFaceValue(''); setChitDuration('');
@@ -144,6 +148,7 @@ export default function SavingsForm({
     setName(initial.name);
     setType(initial.type);
     setStartDate(initial.startDate);
+    setRemittanceId(initial.remittanceId ?? '');
 
     let meta: Record<string, unknown> = {};
     try { meta = JSON.parse(initial.notes); } catch { /* plain text */ }
@@ -407,6 +412,7 @@ export default function SavingsForm({
         notes: JSON.stringify({ interest_rate: Number(fdRate), tenure_months: Number(fdTenure), compound_frequency: fdFreq }),
         chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
         chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
+        remittanceId: remittanceId || null,
       });
 
     } else if (type === 'Chit Funds') {
@@ -454,6 +460,7 @@ export default function SavingsForm({
         chitWonCycle: wonCycle?.cycleNumber ?? (chitIsForeman ? 1 : null),
         chitBidReceived: bidReceived > 0 ? bidReceived : null,
         chitIsForeman,
+        remittanceId: remittanceId || null,
       };
 
       if (onChitSubmit) {
@@ -477,6 +484,7 @@ export default function SavingsForm({
         }),
         chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
         chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
+        remittanceId: remittanceId || null,
       });
 
     } else {
@@ -488,6 +496,7 @@ export default function SavingsForm({
         notes: gNotes.trim(),
         chitMembers: null, chitFaceValue: null, chitDurationMonths: null,
         chitBidFrequency: null, chitWonCycle: null, chitBidReceived: null, chitIsForeman: null,
+        remittanceId: remittanceId || null,
       });
     }
   };
@@ -953,6 +962,23 @@ export default function SavingsForm({
               className={inp + ' resize-none'} />
           </div>
         </>
+      )}
+
+      {/* ── Funded by transfer (all types, shown only when remittances exist) ── */}
+      {remittances.length > 0 && (!isChit || chitStep === 3) && (
+        <div>
+          <label className={lbl}>Funded by Transfer</label>
+          <select value={remittanceId} onChange={e => setRemittanceId(e.target.value)}
+            className={inp + ' bg-white'}>
+            <option value="">— None —</option>
+            {remittances.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.transferDate} · {formatAmount(r.fromAmount, r.fromCurrency)} → {formatAmount(r.toAmount, r.toCurrency)}
+                {r.channel ? ` (${r.channel})` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
 
       {/* ════════════════════════════════════════════════════════════

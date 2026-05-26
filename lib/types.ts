@@ -47,6 +47,8 @@ export interface SavingsEntry {
   chitWonCycle: number | null;
   chitBidReceived: number | null;
   chitIsForeman: boolean | null;
+  // Multi-currency: link to a remittance transfer (optional)
+  remittanceId: string | null;
 }
 
 // ─── Chit Cycles ──────────────────────────────────────────────────────────────
@@ -117,9 +119,54 @@ export const EXPENSE_CATEGORY_ICONS: Record<ExpenseCategory, string> = {
 
 export interface ExpenseEntry {
   id: string;
+  /** Legacy / display amount — equals homeAmount for home-currency expenses */
   amount: number;
   category: ExpenseCategory;
   date: string;
   notes: string;
   createdAt: string;
+  // Multi-currency fields (all required after migration; backfilled for legacy rows)
+  currency: string;           // ISO code of the transaction currency
+  originalAmount: number;     // amount in the transaction currency
+  rateUsed: number;           // 1 foreign = rateUsed home units at save time
+  homeAmount: number;         // always in home currency
+  foreignAmount: number | null; // same as originalAmount when currency ≠ home
+  remittanceId: string | null;  // link to a remittances row
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+export interface UserSettings {
+  id: string;
+  homeCurrency: string;
+  earningCurrency: string;
+}
+
+// ─── Salary ───────────────────────────────────────────────────────────────────
+
+export interface SalaryEntry {
+  id: string;
+  grossAmount: number;
+  currency: string;
+  effectiveFrom: string;   // ISO date
+  effectiveTo: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+// ─── Remittances ──────────────────────────────────────────────────────────────
+
+export interface RemittanceEntry {
+  id: string;
+  transferDate: string;
+  fromCurrency: string;
+  toCurrency: string;
+  fromAmount: number;
+  toAmount: number;
+  rateUsed: number;
+  channel: string | null;
+  reference: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
