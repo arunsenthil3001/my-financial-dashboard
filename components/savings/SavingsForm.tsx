@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { SavingsEntry, SavingsType, ChitCycle, ChitCycleInput, RemittanceEntry } from '@/lib/types';
 import { SAVINGS_TYPES } from '@/lib/types';
-import { formatCurrency, formatDate, todayISO, addMonths, daysUntil } from '@/lib/utils';
-import { formatAmount } from '@/lib/currencies';
+import { formatDate, todayISO, addMonths, daysUntil } from '@/lib/utils';
+import { formatAmount, CURRENCIES } from '@/lib/currencies';
+import { useCurrency } from '@/lib/currencyContext';
 import {
   calcFDValue, fdMaturityDate,
   type CompoundFrequency,
@@ -92,6 +93,8 @@ interface Props {
 export default function SavingsForm({
   initial, initialCycles, remittances = [], onSubmit, onChitSubmit, onCancel, submitting = false,
 }: Props) {
+  const { homeCurrency } = useCurrency();
+
   // ── Common ──
   const [name, setName]                 = useState('');
   const [type, setType]                 = useState<SavingsType>('FD');
@@ -372,7 +375,7 @@ export default function SavingsForm({
       if (!c.amountPaid || isNaN(amt) || amt <= 0) {
         setErr(`cycle_${c.cycleNumber}_paid`, 'Enter amount paid'); ok = false;
       } else if (amt > fv) {
-        setErr(`cycle_${c.cycleNumber}_paid`, `Must be ≤ ${formatCurrency(fv)}`); ok = false;
+        setErr(`cycle_${c.cycleNumber}_paid`, `Must be ≤ ${formatAmount(fv, homeCurrency)}`); ok = false;
       }
       if (c.userWon && !c.bidAmountReceived) {
         setErr(`cycle_${c.cycleNumber}_bid`, 'Enter amount received'); ok = false;
@@ -606,12 +609,12 @@ export default function SavingsForm({
               <p className="text-xs font-semibold text-blue-600 mb-3 uppercase tracking-wide">Live Preview</p>
               <div className="grid grid-cols-2 gap-3">
                 <div><p className="text-xs text-blue-400">Invested</p>
-                  <p className="text-sm font-bold text-blue-900">{formatCurrency(Number(fdPrincipal))}</p></div>
+                  <p className="text-sm font-bold text-blue-900">{formatAmount(Number(fdPrincipal), homeCurrency)}</p></div>
                 <div><p className="text-xs text-blue-400">Maturity Value</p>
-                  <p className="text-sm font-bold text-blue-900">{formatCurrency(fdCurrentValue)}</p></div>
+                  <p className="text-sm font-bold text-blue-900">{formatAmount(fdCurrentValue, homeCurrency)}</p></div>
                 <div><p className="text-xs text-blue-400">Gain</p>
                   <p className="text-sm font-bold text-emerald-700">
-                    +{formatCurrency(fdCurrentValue - Number(fdPrincipal))}
+                    +{formatAmount(fdCurrentValue - Number(fdPrincipal), homeCurrency)}
                     <span className="text-xs font-normal ml-1">({fdGainPct.toFixed(2)}%)</span>
                   </p></div>
                 <div><p className="text-xs text-blue-400">Maturity Date</p>
@@ -666,7 +669,7 @@ export default function SavingsForm({
                   </div>
                   <div className="flex justify-between text-amber-700">
                     <span>Pool per bid</span>
-                    <span className="font-semibold">{formatCurrency(chitTotalPool)}</span>
+                    <span className="font-semibold">{formatAmount(chitTotalPool, homeCurrency)}</span>
                   </div>
                   {chitElapsed > 0 && (
                     <div className="flex justify-between text-amber-800 font-medium">
@@ -772,8 +775,8 @@ export default function SavingsForm({
                     {/* Back-calculated commission hint */}
                     {!isLocked && c.impliedBidAmount !== null && (
                       <p className="text-xs text-gray-400">
-                        Implied bid amount: <span className="font-medium text-gray-600">{formatCurrency(c.impliedBidAmount)}</span>
-                        {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatCurrency(c.commissionDistributed ?? 0)}</span>
+                        Implied bid amount: <span className="font-medium text-gray-600">{formatAmount(c.impliedBidAmount, homeCurrency)}</span>
+                        {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatAmount(c.commissionDistributed ?? 0, homeCurrency)}</span>
                       </p>
                     )}
                   </div>
@@ -788,12 +791,12 @@ export default function SavingsForm({
               {/* Key numbers */}
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Paid so far', value: formatCurrency(chitSummary.totalPaid) },
-                  { label: 'Projected remaining', value: formatCurrency(chitSummary.projectedRemaining) },
-                  { label: 'Total committed', value: formatCurrency(chitSummary.totalCommitted) },
+                  { label: 'Paid so far', value: formatAmount(chitSummary.totalPaid, homeCurrency) },
+                  { label: 'Projected remaining', value: formatAmount(chitSummary.projectedRemaining, homeCurrency) },
+                  { label: 'Total committed', value: formatAmount(chitSummary.totalCommitted, homeCurrency) },
                   {
                     label: chitSummary.hasWon ? 'Bid received' : 'Bid received',
-                    value: chitSummary.bidReceived > 0 ? formatCurrency(chitSummary.bidReceived) : '—',
+                    value: chitSummary.bidReceived > 0 ? formatAmount(chitSummary.bidReceived, homeCurrency) : '—',
                   },
                 ].map(({ label, value }) => (
                   <div key={label} className="bg-gray-50 rounded-xl p-3">
@@ -808,7 +811,7 @@ export default function SavingsForm({
                 <div className={`rounded-xl p-3 flex items-center justify-between ${chitSummary.netGain >= 0 ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
                   <span className="text-sm font-medium text-gray-700">Net Gain / Loss</span>
                   <span className={`text-base font-bold ${chitSummary.netGain >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                    {chitSummary.netGain >= 0 ? '+' : ''}{formatCurrency(chitSummary.netGain)}
+                    {chitSummary.netGain >= 0 ? '+' : ''}{formatAmount(chitSummary.netGain, homeCurrency)}
                     {chitSummary.gainPct !== null && (
                       <span className="text-xs font-normal ml-1">({chitSummary.gainPct.toFixed(1)}%)</span>
                     )}
@@ -914,15 +917,15 @@ export default function SavingsForm({
                 <div><p className="text-xs text-purple-400">Units</p>
                   <p className="text-sm font-bold text-purple-900">{mfUnits || '0'}</p></div>
                 <div><p className="text-xs text-purple-400">NAV at Buy</p>
-                  <p className="text-sm font-bold text-purple-900">₹{mfNavBuy || '0'}</p></div>
+                  <p className="text-sm font-bold text-purple-900">{CURRENCIES[homeCurrency]?.symbol ?? homeCurrency}{mfNavBuy || '0'}</p></div>
                 <div><p className="text-xs text-purple-400">Current NAV</p>
-                  <p className="text-sm font-bold text-purple-900">₹{mfCurrentNav || '0'}</p></div>
+                  <p className="text-sm font-bold text-purple-900">{CURRENCIES[homeCurrency]?.symbol ?? homeCurrency}{mfCurrentNav || '0'}</p></div>
                 <div><p className="text-xs text-purple-400">Invested</p>
-                  <p className="text-sm font-bold text-purple-900">{formatCurrency(mfInvested)}</p></div>
+                  <p className="text-sm font-bold text-purple-900">{formatAmount(mfInvested, homeCurrency)}</p></div>
                 <div className="col-span-2">
                   <p className="text-xs text-purple-400">Current Value</p>
                   <p className="text-sm font-bold text-purple-900">
-                    {formatCurrency(mfCurrentValue)}
+                    {formatAmount(mfCurrentValue, homeCurrency)}
                     <span className={`text-xs font-semibold ml-2 ${mfGainPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
                       {mfGainPct >= 0 ? '▲' : '▼'} {Math.abs(mfGainPct).toFixed(2)}%
                     </span>

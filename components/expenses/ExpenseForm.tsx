@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import type { ExpenseEntry, ExpenseCategory, RemittanceEntry } from '@/lib/types';
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
 import { todayISO } from '@/lib/utils';
-import { CURRENCIES, CURRENCY_LIST, formatAmount } from '@/lib/currencies';
+import { CURRENCIES, formatAmount } from '@/lib/currencies';
 import { getLiveRate } from '@/lib/forex';
 import { useCurrency } from '@/lib/currencyContext';
 
@@ -26,26 +26,23 @@ export default function ExpenseForm({
   const { homeCurrency, earningCurrency } = useCurrency();
 
   // ── Form state ──
-  const [entryMode, setEntryMode]       = useState<'home' | 'earning'>(
-    initial ? (initial.currency === homeCurrency ? 'home' : 'earning') : 'home'
+  const [entryMode, setEntryMode] = useState<'home' | 'earning'>(
+    initial ? (initial.currency === homeCurrency ? 'home' : 'earning') : 'home',
   );
   const [amount, setAmount]             = useState(initial ? String(initial.originalAmount) : '');
   const [category, setCategory]         = useState<ExpenseCategory>(initial?.category ?? 'Food');
   const [date, setDate]                 = useState(initial?.date ?? todayISO());
   const [notes, setNotes]               = useState(initial?.notes ?? '');
-  const [rateUsed, setRateUsed]         = useState(
-    initial ? String(initial.rateUsed) : ''
-  );
+  const [rateUsed, setRateUsed]         = useState(initial ? String(initial.rateUsed) : '');
   const [remittanceId, setRemittanceId] = useState<string>(initial?.remittanceId ?? '');
   const [fetchingRate, setFetchingRate] = useState(false);
   const [errors, setErrors]             = useState<Record<string, string>>({});
 
-  const isEarningMode  = entryMode === 'earning';
-  const txCurrency     = isEarningMode ? earningCurrency : homeCurrency;
-  const isCrossRate    = isEarningMode && earningCurrency !== homeCurrency;
-  const isBackdated    = date < todayISO();
+  const isCrossRate = entryMode === 'earning' && earningCurrency !== homeCurrency;
+  const txCurrency  = entryMode === 'earning' ? earningCurrency : homeCurrency;
+  const isBackdated = date < todayISO();
 
-  // Auto-fetch rate when switching to earning mode
+  // ── Auto-fetch rate when switching to earning mode ──
   const fetchRate = async () => {
     if (!isCrossRate) { setRateUsed('1'); return; }
     setFetchingRate(true);
@@ -55,11 +52,11 @@ export default function ExpenseForm({
   };
 
   useEffect(() => {
-    if (isEarningMode && !rateUsed) { fetchRate(); }
+    if (entryMode === 'earning' && !rateUsed) { fetchRate(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entryMode]);
 
-  // ── Derived display ──
+  // ── Home-currency equivalent preview ──
   const homeAmountPreview = (() => {
     const a = Number(amount);
     const r = Number(rateUsed);
@@ -107,75 +104,7 @@ export default function ExpenseForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
 
-      {/* ── Currency toggle ── */}
-      {earningCurrency !== homeCurrency && (
-        <div className="flex rounded-xl overflow-hidden border border-gray-200">
-          <button type="button"
-            onClick={() => setEntryMode('home')}
-            className={`flex-1 py-2 text-sm font-medium transition-colors ${
-              entryMode === 'home' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
-            }`}>
-            {CURRENCIES[homeCurrency]?.flag ?? ''} {homeCurrency} (Home)
-          </button>
-          <button type="button"
-            onClick={() => setEntryMode('earning')}
-            className={`flex-1 py-2 text-sm font-medium transition-colors ${
-              entryMode === 'earning' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
-            }`}>
-            {CURRENCIES[earningCurrency]?.flag ?? ''} {earningCurrency} (Abroad)
-          </button>
-        </div>
-      )}
-
-      {/* ── Amount ── */}
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Amount ({txCurrency}) *
-        </label>
-        <input
-          type="number" min="0" step="any" value={amount}
-          onChange={e => setAmount(e.target.value)}
-          placeholder="0" autoFocus
-          className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-lg font-semibold text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-        />
-        {errors.amount && <p className="text-xs text-red-500 mt-1">{errors.amount}</p>}
-      </div>
-
-      {/* ── Exchange rate (only for earning-mode cross-currency) ── */}
-      {isCrossRate && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-sm font-medium text-gray-700">
-              Rate (1 {earningCurrency} = ? {homeCurrency})
-            </label>
-            <button type="button" onClick={fetchRate} disabled={fetchingRate}
-              className="text-xs text-indigo-600 font-medium hover:underline disabled:opacity-50">
-              {fetchingRate ? 'Fetching…' : 'Refresh live rate'}
-            </button>
-          </div>
-          <input type="number" step="0.000001" value={rateUsed}
-            onChange={e => setRateUsed(e.target.value)}
-            onFocus={() => { if (!rateUsed) fetchRate(); }}
-            placeholder="e.g. 282.50" className={inputCls} />
-          {errors.rateUsed && <p className="text-xs text-red-500 mt-1">{errors.rateUsed}</p>}
-
-          {/* Preview */}
-          {homeAmountPreview !== null && (
-            <p className="text-xs text-gray-500 mt-1">
-              ≈ {formatAmount(homeAmountPreview, homeCurrency)} at save time
-            </p>
-          )}
-
-          {/* Backdated warning */}
-          {isBackdated && (
-            <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
-              ⚠️ Today's rate used — adjust if you know the actual rate on {date}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* ── Category ── */}
+      {/* ── 1. Category ── */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">Category *</label>
         <div className="flex flex-wrap gap-2">
@@ -193,7 +122,88 @@ export default function ExpenseForm({
         </div>
       </div>
 
-      {/* ── Date ── */}
+      {/* ── 2. Currency toggle (only when earning ≠ home) ── */}
+      {earningCurrency !== homeCurrency && (
+        <div className="flex rounded-xl overflow-hidden border border-gray-200">
+          <button type="button"
+            onClick={() => setEntryMode('home')}
+            className={`flex-1 py-2 text-sm font-semibold transition-colors ${
+              entryMode === 'home'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-white text-gray-500 hover:bg-gray-50'
+            }`}>
+            {CURRENCIES[homeCurrency]?.flag ?? ''} {homeCurrency}
+          </button>
+          <button type="button"
+            onClick={() => setEntryMode('earning')}
+            className={`flex-1 py-2 text-sm font-semibold transition-colors ${
+              entryMode === 'earning'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-white text-gray-500 hover:bg-gray-50'
+            }`}>
+            {CURRENCIES[earningCurrency]?.flag ?? ''} {earningCurrency}
+          </button>
+        </div>
+      )}
+
+      {/* ── 3. Amount ── */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          Amount ({txCurrency}) *
+        </label>
+        <input
+          type="number" min="0" step="any" value={amount}
+          onChange={e => setAmount(e.target.value)}
+          placeholder="0" autoFocus
+          className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-lg font-semibold text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+        />
+        {errors.amount && <p className="text-xs text-red-500 mt-1">{errors.amount}</p>}
+      </div>
+
+      {/* ── 4. Home-currency equivalent + rate (abroad mode only) ── */}
+      {isCrossRate && (
+        <>
+          {/* Home equivalent — read-only */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              {homeCurrency} equivalent
+            </label>
+            <input
+              type="text"
+              readOnly
+              value={homeAmountPreview !== null ? `≈ ${formatAmount(homeAmountPreview, homeCurrency)}` : '—'}
+              className="w-full rounded-xl border border-gray-100 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-500 cursor-default"
+            />
+          </div>
+
+          {/* Exchange rate — editable */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-medium text-gray-700">
+                Rate (1 {earningCurrency} = ? {homeCurrency})
+              </label>
+              <button type="button" onClick={fetchRate} disabled={fetchingRate}
+                className="text-xs text-indigo-600 font-medium hover:underline disabled:opacity-50">
+                {fetchingRate ? 'Fetching…' : 'Fetch live rate'}
+              </button>
+            </div>
+            <input type="number" step="0.000001" value={rateUsed}
+              onChange={e => setRateUsed(e.target.value)}
+              onFocus={() => { if (!rateUsed) fetchRate(); }}
+              placeholder="e.g. 282.50" className={inputCls} />
+            {errors.rateUsed && <p className="text-xs text-red-500 mt-1">{errors.rateUsed}</p>}
+          </div>
+
+          {/* Past-date warning */}
+          {isBackdated && (
+            <p className="text-xs text-amber-600 flex items-center gap-1">
+              ⚠️ Today's rate used — adjust if needed
+            </p>
+          )}
+        </>
+      )}
+
+      {/* ── 5. Date ── */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Date *</label>
         <input type="date" value={date} onChange={e => setDate(e.target.value)}
@@ -201,14 +211,14 @@ export default function ExpenseForm({
         {errors.date && <p className="text-xs text-red-500 mt-1">{errors.date}</p>}
       </div>
 
-      {/* ── Notes ── */}
+      {/* ── 6. Notes ── */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
         <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
           placeholder="Optional description…" className={inputCls} />
       </div>
 
-      {/* ── Link to transfer ── */}
+      {/* ── 7. Link to transfer ── */}
       {remittances.length > 0 && (
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Link to Transfer</label>
@@ -224,7 +234,7 @@ export default function ExpenseForm({
         </div>
       )}
 
-      {/* ── Actions ── */}
+      {/* ── 8. Actions ── */}
       <div className="flex gap-3 pt-2">
         <button type="button" onClick={onCancel}
           className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">

@@ -20,7 +20,7 @@ const PERIODS: { key: FilterPeriod; label: string }[] = [
 export default function ExpensesClient() {
   const { expenses, loading, add, update, remove, filter, monthlyTrend } = useExpenses();
   const { remittances } = useRemittances();
-  const { toDisplay } = useCurrency();
+  const { toDisplay, homeCurrency } = useCurrency();
 
   const [period, setPeriod]         = useState<FilterPeriod>('month');
   const [modalOpen, setModalOpen]   = useState(false);
@@ -90,7 +90,7 @@ export default function ExpensesClient() {
       </div>
 
       {/* ── Monthly trend chart ── */}
-      <MonthlyTrendChart data={monthlyTrend} />
+      <MonthlyTrendChart data={monthlyTrend} homeCurrency={homeCurrency} />
 
       {/* ── Expense list ── */}
       <ExpenseList

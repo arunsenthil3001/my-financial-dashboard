@@ -16,7 +16,7 @@ export async function fetchRateServer(from: string, to: string): Promise<number 
       );
       if (res.ok) {
         const json = await res.json();
-        if (json.result === 'success' && typeof json.conversion_rate === 'number') {
+        if (json.result === 'success' && typeof json.conversion_rate === 'number' && json.conversion_rate > 0) {
           return json.conversion_rate;
         }
       }
@@ -33,8 +33,9 @@ export async function fetchRateServer(from: string, to: string): Promise<number 
     );
     if (res.ok) {
       const json = await res.json();
-      if (json.result === 'success' && json.rates?.[to] != null) {
-        return json.rates[to] as number;
+      const fallbackRate = json.rates?.[to];
+      if (json.result === 'success' && typeof fallbackRate === 'number' && fallbackRate > 0) {
+        return fallbackRate;
       }
     }
   } catch {

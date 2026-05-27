@@ -11,23 +11,34 @@ import {
 } from 'recharts';
 import type { SavingsEntry, SavingsType } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
-import { formatCurrency } from '@/lib/utils';
+import { formatAmount } from '@/lib/currencies';
+import { useCurrency } from '@/lib/currencyContext';
 
 interface Props {
   savings: SavingsEntry[];
 }
 
-const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { name: string; value: number }[] }) => {
+const CustomTooltip = ({
+  active,
+  payload,
+  homeCurrency,
+}: {
+  active?: boolean;
+  payload?: { name: string; value: number }[];
+  homeCurrency: string;
+}) => {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-3 py-2 text-sm">
       <p className="font-semibold text-gray-800">{payload[0].name}</p>
-      <p className="text-gray-600">{formatCurrency(payload[0].value)}</p>
+      <p className="text-gray-600">{formatAmount(payload[0].value, homeCurrency)}</p>
     </div>
   );
 };
 
 export default function SavingsBreakdownChart({ savings }: Props) {
+  const { homeCurrency } = useCurrency();
+
   const data = useMemo(() => {
     const grouped: Partial<Record<SavingsType, number>> = {};
     for (const s of savings) {
@@ -61,7 +72,7 @@ export default function SavingsBreakdownChart({ savings }: Props) {
               />
             ))}
           </Pie>
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={<CustomTooltip homeCurrency={homeCurrency} />} />
           <Legend
             iconType="circle"
             iconSize={8}

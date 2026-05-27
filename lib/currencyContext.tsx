@@ -64,7 +64,8 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     }
     let cancelled = false;
     getLiveRate(earningCurrency, homeCurrency).then((r) => {
-      if (!cancelled) setLiveRate(r ?? 1);
+      // Treat null, undefined, and 0 all as "failed" — fall back to 1 so toDisplay never divides by zero.
+      if (!cancelled) setLiveRate((r != null && r > 0) ? r : 1);
     });
     return () => { cancelled = true; };
   }, [rateKey, settingsLoading, earningCurrency, homeCurrency, liveRate]);
@@ -81,7 +82,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       if (display === 'home' || earningCurrency === homeCurrency) {
         return formatAmount(homeAmount, homeCurrency);
       }
-      const rate = liveRate ?? 1;
+      const rate = (liveRate != null && liveRate > 0) ? liveRate : 1;
       return formatAmount(homeAmount / rate, earningCurrency);
     },
     [display, homeCurrency, earningCurrency, liveRate],

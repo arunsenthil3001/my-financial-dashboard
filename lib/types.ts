@@ -140,6 +140,24 @@ export interface UserSettings {
   id: string;
   homeCurrency: string;
   earningCurrency: string;
+  // Rate cache (written by cron)
+  cachedRate: number | null;
+  rateFetchedAt: string | null;
+  // Rate alert preferences
+  rateAlertEnabled: boolean;
+  rateAlertThresholdPct: number;
+  rateAlertDismissedAt: string | null;
+  rateAlertDismissedRate: number | null;
+}
+
+// ─── Rate Snapshots ───────────────────────────────────────────────────────────
+
+export interface RateSnapshot {
+  id: string;
+  fromCurrency: string;
+  toCurrency: string;
+  rate: number;
+  fetchedAt: string;
 }
 
 // ─── Salary ───────────────────────────────────────────────────────────────────

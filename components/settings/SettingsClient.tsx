@@ -7,6 +7,7 @@ import { useCurrency } from '@/lib/currencyContext';
 import { CURRENCY_LIST, CURRENCIES, formatAmount } from '@/lib/currencies';
 import { formatDate, todayISO } from '@/lib/utils';
 import Modal from '@/components/ui/Modal';
+import { useRateIntelligence } from '@/hooks/useRateIntelligence';
 
 // ── Guided switch modal ───────────────────────────────────────────────────────
 
@@ -144,10 +145,16 @@ export default function SettingsClient() {
   const { settings, loading: settingsLoading, update: updateSettings } = useSettings();
   const { salary, current: currentSalary, loading: salaryLoading, closeCurrentAndAdd, remove: removeSalary } = useSalary();
   const { liveRate, earningCurrency: ctxEarning, homeCurrency: ctxHome, switchModalOpen, openSwitchModal, closeSwitchModal } = useCurrency();
+  const { rateContext } = useRateIntelligence();
 
-  const [salaryModalOpen, setSalaryModalOpen] = useState(false);
+  const [salaryModalOpen, setSalaryModalOpen]   = useState(false);
   const [submittingSalary, setSubmittingSalary] = useState(false);
-  const [confirmSalaryId, setConfirmSalaryId] = useState<string | null>(null);
+  const [confirmSalaryId, setConfirmSalaryId]   = useState<string | null>(null);
+
+  // Rate alert local state (controlled by settings)
+  const [alertEnabled, setAlertEnabled]     = useState<boolean | null>(null);
+  const [alertThreshold, setAlertThreshold] = useState<number | null>(null);
+  const [savingAlert, setSavingAlert]       = useState(false);
 
   const homeCurrency    = settings?.homeCurrency    ?? 'INR';
   const earningCurrency = settings?.earningCurrency ?? 'INR';
@@ -290,6 +297,111 @@ export default function SettingsClient() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Rate Alerts ── */}
+      {homeCurrency !== earningCurrency && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-700">Rate Alerts</h2>
+
+          {/* Enable toggle */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-800">Rate alert notifications</p>
+              <p className="text-xs text-gray-400">Show a banner when the rate is unusually high</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAlertEnabled((v) => v === null ? !(settings?.rateAlertEnabled ?? true) : !v)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                (alertEnabled ?? settings?.rateAlertEnabled ?? true) ? 'bg-indigo-600' : 'bg-gray-200'
+              }`}
+              role="switch"
+              aria-checked={(alertEnabled ?? settings?.rateAlertEnabled ?? true)}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                (alertEnabled ?? settings?.rateAlertEnabled ?? true) ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+
+          {/* Threshold */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Alert when rate is <span className="text-indigo-700 font-semibold">{(alertThreshold ?? settings?.rateAlertThresholdPct ?? 1.0).toFixed(1)}%</span> above average
+            </label>
+            <input
+              type="range"
+              min={0.5}
+              max={5}
+              step={0.5}
+              value={alertThreshold ?? settings?.rateAlertThresholdPct ?? 1.0}
+              onChange={(e) => setAlertThreshold(Number(e.target.value))}
+              className="w-full h-2 bg-gray-200 rounded-full appearance-none cursor-pointer accent-indigo-600"
+            />
+            <div className="flex justify-between text-xs text-gray-400 mt-1">
+              <span>0.5%</span>
+              <span>5.0%</span>
+            </div>
+          </div>
+
+          {/* Status info */}
+          <div className="bg-gray-50 rounded-xl p-3 space-y-1.5 text-xs text-gray-600">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400">Baseline source</span>
+              <span className="font-medium capitalize">
+                {rateContext?.baselineSource
+                  ? rateContext.baselineSource === 'remittance_history' ? 'Transfer history' : '90-day average'
+                  : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400">Today's rate</span>
+              <span className="font-medium">
+                {rateContext?.todayRate
+                  ? `1 ${earningCurrency} = ${formatAmount(rateContext.todayRate, homeCurrency)}`
+                  : settings?.cachedRate
+                    ? `1 ${earningCurrency} = ${formatAmount(settings.cachedRate, homeCurrency)}`
+                    : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400">Your average</span>
+              <span className="font-medium">
+                {rateContext?.baseline
+                  ? `1 ${earningCurrency} = ${formatAmount(rateContext.baseline, homeCurrency)}`
+                  : '—'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400">Last checked</span>
+              <span className="font-medium">
+                {settings?.rateFetchedAt
+                  ? new Date(settings.rateFetchedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                  : '—'}
+              </span>
+            </div>
+          </div>
+
+          {/* Save button — only show when changes are pending */}
+          {(alertEnabled !== null || alertThreshold !== null) && (
+            <button
+              onClick={async () => {
+                setSavingAlert(true);
+                const patch: Parameters<typeof updateSettings>[0] = {};
+                if (alertEnabled   !== null) patch.rateAlertEnabled      = alertEnabled;
+                if (alertThreshold !== null) patch.rateAlertThresholdPct = alertThreshold;
+                const ok = await updateSettings(patch);
+                if (ok) { setAlertEnabled(null); setAlertThreshold(null); }
+                setSavingAlert(false);
+              }}
+              disabled={savingAlert}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl text-sm transition-colors disabled:opacity-50"
+            >
+              {savingAlert ? 'Saving…' : 'Save Alert Settings'}
+            </button>
+          )}
         </div>
       )}
 

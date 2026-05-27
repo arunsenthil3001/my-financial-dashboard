@@ -4,12 +4,14 @@ import { useState } from 'react';
 import { useRemittances, type RemittanceInput } from '@/hooks/useRemittances';
 import { useCurrency } from '@/lib/currencyContext';
 import { useSettings } from '@/hooks/useSettings';
+import { useRateIntelligence } from '@/hooks/useRateIntelligence';
 import { CURRENCIES, CURRENCY_LIST, formatAmount } from '@/lib/currencies';
 import { getLiveRate } from '@/lib/forex';
 import { formatDate, todayISO, monthKey } from '@/lib/utils';
 import type { RemittanceEntry } from '@/lib/types';
 import Modal from '@/components/ui/Modal';
 import EmptyState from '@/components/ui/EmptyState';
+import RateHistoryChart from '@/components/remittances/RateHistoryChart';
 
 // ── Transfer Form ─────────────────────────────────────────────────────────────
 
@@ -168,11 +170,13 @@ export default function RemittancesClient() {
   const { remittances, loading, add, update, remove, totalSent, totalReceived } = useRemittances();
   const { settings } = useSettings();
   const { toDisplay } = useCurrency();
+  const { rateContext, rateHistory } = useRateIntelligence();
 
-  const [modalOpen, setModalOpen]   = useState(false);
-  const [editing, setEditing]       = useState<RemittanceEntry | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [confirmId, setConfirmId]   = useState<string | null>(null);
+  const [modalOpen, setModalOpen]       = useState(false);
+  const [editing, setEditing]           = useState<RemittanceEntry | null>(null);
+  const [submitting, setSubmitting]     = useState(false);
+  const [confirmId, setConfirmId]       = useState<string | null>(null);
+  const [chartExpanded, setChartExpanded] = useState(false);
 
   const homeCurrency    = settings?.homeCurrency    ?? 'INR';
   const earningCurrency = settings?.earningCurrency ?? 'INR';
@@ -344,6 +348,46 @@ export default function RemittancesClient() {
           </div>
         );
       })}
+
+      {/* ── Rate History Chart (collapsible) ── */}
+      {earningCurrency !== homeCurrency && (
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+          <button
+            onClick={() => setChartExpanded((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base">📈</span>
+              <div>
+                <p className="text-sm font-semibold text-gray-700">Rate History</p>
+                <p className="text-xs text-gray-400">
+                  Last 90 days · 1 {earningCurrency} → {homeCurrency}
+                  {rateContext?.todayRate ? ` · Today: ${formatAmount(rateContext.todayRate, homeCurrency)}` : ''}
+                </p>
+              </div>
+            </div>
+            <svg
+              className={`w-4 h-4 text-gray-400 transition-transform ${chartExpanded ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {chartExpanded && (
+            <div className="px-5 pb-5">
+              <RateHistoryChart
+                history={rateHistory}
+                baseline={rateContext?.baseline ?? null}
+                baselineSource={rateContext?.baselineSource ?? null}
+                remittances={remittances}
+                earningCurrency={earningCurrency}
+                homeCurrency={homeCurrency}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Modal ── */}
       <Modal open={modalOpen} onClose={closeModal} title={editing ? 'Edit Transfer' : 'New Transfer'}>

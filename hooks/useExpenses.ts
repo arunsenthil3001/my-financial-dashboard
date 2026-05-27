@@ -29,21 +29,30 @@ interface ExpenseRow {
 // ── Mappers ───────────────────────────────────────────────────────────────────
 
 function rowToEntry(row: ExpenseRow): ExpenseEntry {
-  const amount = Number(row.amount);
-  const homeAmount = row.home_amount !== null ? Number(row.home_amount) : amount;
+  // coalesce(home_amount, amount): guard against null/undefined/NaN in either column.
+  // Existing rows may have null home_amount if the migration backfill didn't run.
+  // Use loose != null so undefined is also treated as "missing" (strict !== misses it).
+  const rawAmount  = Number(row.amount);
+  const legacyAmount = isFinite(rawAmount) ? rawAmount : 0;
+  const rawHome    = row.home_amount != null ? Number(row.home_amount) : NaN;
+  const homeAmount = isFinite(rawHome) ? rawHome : legacyAmount;
+
+  const rawOrig    = row.original_amount != null ? Number(row.original_amount) : NaN;
+  const rawRate    = row.rate_used       != null ? Number(row.rate_used)       : NaN;
+
   return {
     id: row.id,
-    amount,
+    amount: legacyAmount,
     category: row.category as ExpenseCategory,
     date: row.date,
     notes: row.notes ?? '',
     createdAt: row.created_at,
     currency: row.currency ?? 'INR',
-    originalAmount: row.original_amount !== null ? Number(row.original_amount) : amount,
-    rateUsed: row.rate_used !== null ? Number(row.rate_used) : 1,
+    originalAmount: isFinite(rawOrig) ? rawOrig : legacyAmount,
+    rateUsed:       isFinite(rawRate) ? rawRate : 1,
     homeAmount,
-    foreignAmount: row.foreign_amount !== null ? Number(row.foreign_amount) : null,
-    remittanceId: row.remittance_id ?? null,
+    foreignAmount: row.foreign_amount != null ? Number(row.foreign_amount) : null,
+    remittanceId:  row.remittance_id  ?? null,
   };
 }
 

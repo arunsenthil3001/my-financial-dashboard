@@ -9,6 +9,12 @@ interface SettingsRow {
   id: string;
   home_currency: string;
   earning_currency: string;
+  cached_rate: number | null;
+  rate_fetched_at: string | null;
+  rate_alert_enabled: boolean | null;
+  rate_alert_threshold_pct: number | null;
+  rate_alert_dismissed_at: string | null;
+  rate_alert_dismissed_rate: number | null;
 }
 
 function rowToSettings(row: SettingsRow): UserSettings {
@@ -16,8 +22,23 @@ function rowToSettings(row: SettingsRow): UserSettings {
     id: row.id,
     homeCurrency: row.home_currency,
     earningCurrency: row.earning_currency,
+    cachedRate: row.cached_rate ?? null,
+    rateFetchedAt: row.rate_fetched_at ?? null,
+    rateAlertEnabled: row.rate_alert_enabled ?? true,
+    rateAlertThresholdPct: row.rate_alert_threshold_pct ?? 1.0,
+    rateAlertDismissedAt: row.rate_alert_dismissed_at ?? null,
+    rateAlertDismissedRate: row.rate_alert_dismissed_rate ?? null,
   };
 }
+
+type SettingsPatch = Partial<Pick<UserSettings,
+  | 'homeCurrency'
+  | 'earningCurrency'
+  | 'rateAlertEnabled'
+  | 'rateAlertThresholdPct'
+  | 'rateAlertDismissedAt'
+  | 'rateAlertDismissedRate'
+>>;
 
 export function useSettings() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -33,7 +54,6 @@ export function useSettings() {
       .single();
 
     if (error) {
-      // Table might not exist yet if migration hasn't been run
       console.warn('useSettings load:', error.message);
     } else {
       setSettings(rowToSettings(data as SettingsRow));
@@ -44,11 +64,15 @@ export function useSettings() {
   useEffect(() => { load(); }, [load]);
 
   const update = useCallback(
-    async (patch: Partial<Pick<UserSettings, 'homeCurrency' | 'earningCurrency'>>): Promise<boolean> => {
+    async (patch: SettingsPatch, silent?: boolean): Promise<boolean> => {
       if (!settings) return false;
       const row: Partial<SettingsRow> = {};
-      if (patch.homeCurrency    !== undefined) row.home_currency    = patch.homeCurrency;
-      if (patch.earningCurrency !== undefined) row.earning_currency = patch.earningCurrency;
+      if (patch.homeCurrency          !== undefined) row.home_currency           = patch.homeCurrency;
+      if (patch.earningCurrency       !== undefined) row.earning_currency        = patch.earningCurrency;
+      if (patch.rateAlertEnabled      !== undefined) row.rate_alert_enabled      = patch.rateAlertEnabled;
+      if (patch.rateAlertThresholdPct !== undefined) row.rate_alert_threshold_pct = patch.rateAlertThresholdPct;
+      if (patch.rateAlertDismissedAt  !== undefined) row.rate_alert_dismissed_at  = patch.rateAlertDismissedAt;
+      if (patch.rateAlertDismissedRate !== undefined) row.rate_alert_dismissed_rate = patch.rateAlertDismissedRate;
 
       const { data, error } = await supabase
         .from('user_settings')
@@ -58,11 +82,11 @@ export function useSettings() {
         .single();
 
       if (error) {
-        toast(`Failed to update settings: ${error.message}`, 'error');
+        if (!silent) toast(`Failed to update settings: ${error.message}`, 'error');
         return false;
       }
       setSettings(rowToSettings(data as SettingsRow));
-      toast('Settings saved', 'success');
+      if (!silent) toast('Settings saved', 'success');
       return true;
     },
     [settings, toast],

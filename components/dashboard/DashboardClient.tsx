@@ -7,6 +7,8 @@ import { useExpenses } from '@/hooks/useExpenses';
 import { useRemittances } from '@/hooks/useRemittances';
 import { useSalary } from '@/hooks/useSalary';
 import { useCurrency } from '@/lib/currencyContext';
+import { useSettings } from '@/hooks/useSettings';
+import { useRateIntelligence } from '@/hooks/useRateIntelligence';
 import { formatCurrency, formatDate, formatShortDate, daysUntil, addMonths, isThisMonth } from '@/lib/utils';
 import { formatAmount } from '@/lib/currencies';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
@@ -18,6 +20,7 @@ import {
 import { elapsedCycles } from '@/lib/chitFundCalc';
 import Modal from '@/components/ui/Modal';
 import ExpenseForm from '@/components/expenses/ExpenseForm';
+import RateAlertBanner from '@/components/dashboard/RateAlertBanner';
 import type { ExpenseEntry } from '@/lib/types';
 import type { ExpenseInput } from '@/hooks/useExpenses';
 
@@ -27,6 +30,8 @@ export default function DashboardClient() {
   const { remittances, loading: remittancesLoading } = useRemittances();
   const { current: currentSalary } = useSalary();
   const { toDisplay, homeCurrency, earningCurrency, liveRate } = useCurrency();
+  const { settings, update: updateSettings } = useSettings();
+  const { rateContext } = useRateIntelligence();
 
   const [quickAdd, setQuickAdd] = useState(false);
   const [quickSubmitting, setQuickSubmitting] = useState(false);
@@ -119,6 +124,39 @@ export default function DashboardClient() {
     if (ok) setQuickAdd(false);
   };
 
+  // ── Rate alert dismissal logic ──
+  const todayRate = rateContext?.todayRate ?? null;
+  const dismissedRate = settings?.rateAlertDismissedRate ?? null;
+  const isDismissed =
+    settings?.rateAlertDismissedAt !== null &&
+    settings?.rateAlertDismissedAt !== undefined &&
+    dismissedRate !== null &&
+    todayRate !== null &&
+    Math.abs(todayRate - dismissedRate) / dismissedRate < 0.005; // within 0.5%
+
+  const showBanner =
+    !!(rateContext?.shouldAlert) &&
+    !isDismissed &&
+    !!(settings?.rateAlertEnabled) &&
+    earningCurrency !== homeCurrency;
+
+  const handleDismiss = async () => {
+    if (!todayRate) return;
+    await updateSettings(
+      { rateAlertDismissedAt: new Date().toISOString(), rateAlertDismissedRate: todayRate },
+      true, // silent — no toast
+    );
+  };
+
+  // Typical transfer amount: average of past transfers, or 1000 if none
+  const typicalTransfer = useMemo(() => {
+    const pair = remittances.filter(
+      (r) => r.fromCurrency === earningCurrency && r.toCurrency === homeCurrency,
+    );
+    if (pair.length === 0) return 1000;
+    return pair.reduce((s, r) => s + r.fromAmount, 0) / pair.length;
+  }, [remittances, earningCurrency, homeCurrency]);
+
   // ── Loading state (after all hooks) ──
   if (savingsLoading || expensesLoading || remittancesLoading) {
     return (
@@ -153,6 +191,16 @@ export default function DashboardClient() {
 
   return (
     <div className="space-y-5">
+      {/* ── Rate alert banner (top, above all cards) ── */}
+      {showBanner && rateContext && settings && (
+        <RateAlertBanner
+          rateContext={rateContext}
+          settings={settings}
+          typicalTransferAmount={typicalTransfer}
+          onDismiss={handleDismiss}
+        />
+      )}
+
       {/* ── Greeting ── */}
       <div>
         <p className="text-xl font-bold text-gray-900">{greeting}! 👋</p>

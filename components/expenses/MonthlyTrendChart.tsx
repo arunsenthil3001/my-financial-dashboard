@@ -10,7 +10,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { formatCurrency } from '@/lib/utils';
+import { formatAmount, CURRENCIES } from '@/lib/currencies';
 
 interface DataPoint {
   month: string;
@@ -19,29 +19,33 @@ interface DataPoint {
 
 interface Props {
   data: DataPoint[];
+  homeCurrency: string;
 }
 
 const CustomTooltip = ({
   active,
   payload,
   label,
+  homeCurrency,
 }: {
   active?: boolean;
   payload?: { value: number }[];
   label?: string;
+  homeCurrency: string;
 }) => {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-3 py-2 text-sm">
       <p className="font-medium text-gray-700 mb-0.5">{label}</p>
-      <p className="font-bold text-gray-900">{formatCurrency(payload[0].value)}</p>
+      <p className="font-bold text-gray-900">{formatAmount(payload[0].value, homeCurrency)}</p>
     </div>
   );
 };
 
-export default function MonthlyTrendChart({ data }: Props) {
+export default function MonthlyTrendChart({ data, homeCurrency }: Props) {
   const maxVal = Math.max(...data.map((d) => d.total), 1);
   const currentMonth = data[data.length - 1]?.month;
+  const symbol = CURRENCIES[homeCurrency]?.symbol ?? homeCurrency;
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
@@ -59,10 +63,10 @@ export default function MonthlyTrendChart({ data }: Props) {
             tick={{ fontSize: 10, fill: '#9CA3AF' }}
             axisLine={false}
             tickLine={false}
-            tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
+            tickFormatter={(v) => `${symbol}${(v / 1000).toFixed(0)}k`}
             domain={[0, maxVal * 1.2]}
           />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: '#F3F4F6', radius: 8 }} />
+          <Tooltip content={<CustomTooltip homeCurrency={homeCurrency} />} cursor={{ fill: '#F3F4F6', radius: 8 }} />
           <Bar dataKey="total" radius={[6, 6, 0, 0]}>
             {data.map((entry) => (
               <Cell

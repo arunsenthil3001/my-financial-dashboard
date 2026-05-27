@@ -1,9 +1,17 @@
-export function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
+import { CURRENCIES } from './currencies';
+
+/**
+ * Format an amount with the correct currency symbol, 0 decimal places.
+ * Uses the CURRENCIES map — never hardcodes a symbol.
+ */
+export function formatCurrency(amount: number, currency: string): string {
+  const cur    = CURRENCIES[currency];
+  const symbol = cur?.symbol ?? currency;
+  const formatted = Math.abs(amount).toLocaleString('en-IN', {
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(amount);
+  });
+  return `${amount < 0 ? '-' : ''}${symbol}${formatted}`;
 }
 
 export function formatDate(dateStr: string): string {

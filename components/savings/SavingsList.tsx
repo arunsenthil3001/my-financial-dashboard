@@ -3,7 +3,9 @@
 import { useState } from 'react';
 import type { SavingsEntry } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
-import { formatCurrency, formatDate, daysUntil, addMonths } from '@/lib/utils';
+import { formatDate, daysUntil, addMonths } from '@/lib/utils';
+import { formatAmount, CURRENCIES } from '@/lib/currencies';
+import { useCurrency } from '@/lib/currencyContext';
 import {
   parseFDMeta, fdMaturityDate,
   parseMFMeta,
@@ -45,6 +47,7 @@ function FDDetail({ entry }: { entry: SavingsEntry }) {
 }
 
 function ChitDetail({ entry }: { entry: SavingsEntry }) {
+  const { homeCurrency } = useCurrency();
   // New-schema chit (has dedicated columns)
   if (entry.chitMembers && entry.chitFaceValue && entry.chitDurationMonths && entry.chitBidFrequency) {
     const n    = entry.chitMembers;
@@ -94,26 +97,26 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
         <div className="grid grid-cols-3 gap-2 text-xs">
           <div>
             <p className="text-gray-400 mb-0.5">Paid so far</p>
-            <p className="font-semibold text-gray-700">{formatCurrency(totalPaid)}</p>
+            <p className="font-semibold text-gray-700">{formatAmount(totalPaid, homeCurrency)}</p>
           </div>
           <div>
             <p className="text-gray-400 mb-0.5">Bid received</p>
             <p className="font-semibold text-gray-700">
-              {hasWon && bidReceived > 0 ? formatCurrency(bidReceived) : '—'}
+              {hasWon && bidReceived > 0 ? formatAmount(bidReceived, homeCurrency) : '—'}
             </p>
           </div>
           <div>
             <p className="text-gray-400 mb-0.5">Net gain</p>
             <p className={`font-semibold ${netGain !== null ? (netGain >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
               {netGain !== null
-                ? `${netGain >= 0 ? '+' : ''}${formatCurrency(netGain)}${gainPct !== null ? ` (${gainPct.toFixed(0)}%)` : ''}`
+                ? `${netGain >= 0 ? '+' : ''}${formatAmount(netGain, homeCurrency)}${gainPct !== null ? ` (${gainPct.toFixed(0)}%)` : ''}`
                 : 'Ongoing'}
             </p>
           </div>
         </div>
 
         <p className="text-xs text-gray-400">
-          {n} members · ₹{fv.toLocaleString('en-IN')} face value · {d} months
+          {n} members · {CURRENCIES[homeCurrency]?.symbol ?? homeCurrency}{fv.toLocaleString('en-IN')} face value · {d} months
         </p>
       </div>
     );
@@ -173,6 +176,7 @@ function TypeDetail({ entry }: { entry: SavingsEntry }) {
 // ─── Main list ────────────────────────────────────────────────────────────────
 
 export default function SavingsList({ savings, onEdit, onDelete }: Props) {
+  const { homeCurrency } = useCurrency();
   const [confirmId, setConfirmId] = useState<string | null>(null);
 
   if (savings.length === 0) {
@@ -251,16 +255,16 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
               <div className="mt-3 pt-3 border-t border-gray-50 grid grid-cols-3 gap-2">
                 <div>
                   <p className="text-xs text-gray-400 mb-0.5">Invested</p>
-                  <p className="text-sm font-semibold text-gray-700">{formatCurrency(s.amountInvested)}</p>
+                  <p className="text-sm font-semibold text-gray-700">{formatAmount(s.amountInvested, homeCurrency)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-400 mb-0.5">Current</p>
-                  <p className="text-sm font-semibold text-gray-900">{formatCurrency(s.currentValue)}</p>
+                  <p className="text-sm font-semibold text-gray-900">{formatAmount(s.currentValue, homeCurrency)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-400 mb-0.5">Gain / Loss</p>
                   <p className={`text-sm font-semibold ${positive ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {positive ? '+' : ''}{formatCurrency(gain)}
+                    {positive ? '+' : ''}{formatAmount(gain, homeCurrency)}
                     <span className="text-xs font-normal ml-1">({gainPct.toFixed(1)}%)</span>
                   </p>
                 </div>
