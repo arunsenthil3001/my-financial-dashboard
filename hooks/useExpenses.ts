@@ -58,9 +58,10 @@ function rowToEntry(row: ExpenseRow): ExpenseEntry {
 
 export type ExpenseInput = Omit<ExpenseEntry, 'id' | 'createdAt'>;
 
-function inputToRow(input: ExpenseInput) {
+// Full row — only usable after the multi-currency migration has been run.
+function inputToFullRow(input: ExpenseInput) {
   return {
-    amount: input.homeAmount,  // keep legacy `amount` column in sync with homeAmount
+    amount: input.homeAmount,
     category: input.category,
     date: input.date,
     notes: input.notes,
@@ -69,7 +70,17 @@ function inputToRow(input: ExpenseInput) {
     rate_used: input.rateUsed,
     home_amount: input.homeAmount,
     foreign_amount: input.foreignAmount ?? null,
-    remittance_id: input.remittanceId ?? null,
+    // remittance_id is patched separately via linkToRemittance()
+  };
+}
+
+// Legacy row — works with the original schema (no multi-currency columns).
+function inputToBasicRow(input: ExpenseInput) {
+  return {
+    amount: input.homeAmount,
+    category: input.category,
+    date: input.date,
+    notes: input.notes,
   };
 }
 
@@ -99,14 +110,23 @@ export function useExpenses() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Insert ──
+  // ── Insert (tries full multi-currency row; falls back to basic if columns missing) ──
   const add = useCallback(
     async (input: ExpenseInput): Promise<boolean> => {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('expenses')
-        .insert(inputToRow(input))
+        .insert(inputToFullRow(input))
         .select()
         .single();
+
+      // PGRST204 = column not found (migration not yet run) → retry with legacy schema
+      if (error?.code === 'PGRST204') {
+        ({ data, error } = await supabase
+          .from('expenses')
+          .insert(inputToBasicRow(input))
+          .select()
+          .single());
+      }
 
       if (error) {
         toast(`Failed to add expense: ${error.message}`, 'error');
@@ -119,15 +139,24 @@ export function useExpenses() {
     [toast],
   );
 
-  // ── Update ──
+  // ── Update (same fallback pattern) ──
   const update = useCallback(
     async (id: string, input: ExpenseInput): Promise<boolean> => {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('expenses')
-        .update(inputToRow(input))
+        .update(inputToFullRow(input))
         .eq('id', id)
         .select()
         .single();
+
+      if (error?.code === 'PGRST204') {
+        ({ data, error } = await supabase
+          .from('expenses')
+          .update(inputToBasicRow(input))
+          .eq('id', id)
+          .select()
+          .single());
+      }
 
       if (error) {
         toast(`Failed to update expense: ${error.message}`, 'error');
@@ -152,6 +181,25 @@ export function useExpenses() {
       }
       setExpenses((prev) => prev.filter((e) => e.id !== id));
       toast('Expense deleted', 'success');
+      return true;
+    },
+    [toast],
+  );
+
+  // ── Link to remittance (patches only remittance_id — requires migration) ──
+  const linkToRemittance = useCallback(
+    async (id: string, remittanceId: string | null): Promise<boolean> => {
+      const { error } = await supabase
+        .from('expenses')
+        .update({ remittance_id: remittanceId })
+        .eq('id', id);
+      if (error) {
+        toast(`Failed to link expense: ${error.message}`, 'error');
+        return false;
+      }
+      setExpenses((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, remittanceId } : e)),
+      );
       return true;
     },
     [toast],
@@ -190,5 +238,5 @@ export function useExpenses() {
     });
   }, [expenses]);
 
-  return { expenses, loading, add, update, remove, filter, monthlyTotal, monthlyTrend };
+  return { expenses, loading, add, update, remove, linkToRemittance, filter, monthlyTotal, monthlyTrend };
 }

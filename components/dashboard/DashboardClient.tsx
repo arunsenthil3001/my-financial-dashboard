@@ -21,20 +21,22 @@ import { elapsedCycles } from '@/lib/chitFundCalc';
 import Modal from '@/components/ui/Modal';
 import ExpenseForm from '@/components/expenses/ExpenseForm';
 import RateAlertBanner from '@/components/dashboard/RateAlertBanner';
+import AllocateModal from '@/components/dashboard/AllocateModal';
 import type { ExpenseEntry } from '@/lib/types';
 import type { ExpenseInput } from '@/hooks/useExpenses';
 
 export default function DashboardClient() {
-  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct } = useSavings();
-  const { expenses, loading: expensesLoading, add, monthlyTotal, monthlyTrend } = useExpenses();
+  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct, linkToRemittance: linkSavingToRemittance } = useSavings();
+  const { expenses, loading: expensesLoading, add, monthlyTotal, monthlyTrend, linkToRemittance: linkExpenseToRemittance } = useExpenses();
   const { remittances, loading: remittancesLoading } = useRemittances();
   const { current: currentSalary } = useSalary();
   const { toDisplay, homeCurrency, earningCurrency, liveRate } = useCurrency();
   const { settings, update: updateSettings } = useSettings();
   const { rateContext } = useRateIntelligence();
 
-  const [quickAdd, setQuickAdd] = useState(false);
+  const [quickAdd, setQuickAdd]           = useState(false);
   const [quickSubmitting, setQuickSubmitting] = useState(false);
+  const [allocateOpen, setAllocateOpen]   = useState(false);
 
   // ── useMemo MUST come before any early return (Rules of Hooks) ──
   const savingsHighlights = useMemo(() => savings.map((s) => {
@@ -301,17 +303,19 @@ export default function DashboardClient() {
 
       {/* ── Unallocated Pool ── */}
       {unallocatedPool > 0 && (
-        <Link href="/remittances"
-          className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm hover:bg-amber-100 transition-colors">
+        <button
+          onClick={() => setAllocateOpen(true)}
+          className="w-full flex items-center justify-between bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm hover:bg-amber-100 active:bg-amber-200 transition-colors text-left"
+        >
           <div>
             <p className="text-xs font-semibold text-amber-700 mb-0.5">💰 Unallocated Pool</p>
             <p className="text-xs text-amber-600">Money received but not yet linked to savings or expenses</p>
           </div>
           <div className="text-right shrink-0 ml-3">
             <p className="text-base font-bold text-amber-800">{toDisplay(unallocatedPool)}</p>
-            <p className="text-xs text-amber-600">Allocate →</p>
+            <p className="text-xs text-amber-600 font-medium">Allocate →</p>
           </div>
-        </Link>
+        </button>
       )}
 
       {/* ── Savings breakdown ── */}
@@ -469,6 +473,19 @@ export default function DashboardClient() {
           submitting={quickSubmitting}
         />
       </Modal>
+
+      {/* ── Allocate modal ── */}
+      <AllocateModal
+        open={allocateOpen}
+        onClose={() => setAllocateOpen(false)}
+        remittances={remittances}
+        savings={savings}
+        expenses={expenses}
+        onLinkSaving={linkSavingToRemittance}
+        onLinkExpense={linkExpenseToRemittance}
+        homeCurrency={homeCurrency}
+        earningCurrency={earningCurrency}
+      />
     </div>
   );
 }

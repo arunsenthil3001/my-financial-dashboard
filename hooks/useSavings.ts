@@ -56,6 +56,9 @@ function rowToEntry(row: SavingsRow): SavingsEntry {
 type SavingsInput = Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>;
 
 function inputToRow(input: SavingsInput) {
+  // NOTE: remittance_id is intentionally excluded here.
+  // It is patched separately via linkToRemittance() once the
+  // DB migration (add_remittance_links.sql) has been run.
   return {
     name: input.name,
     type: input.type,
@@ -70,7 +73,6 @@ function inputToRow(input: SavingsInput) {
     chit_won_cycle:       input.chitWonCycle          ?? null,
     chit_bid_received:    input.chitBidReceived        ?? null,
     chit_is_foreman:      input.chitIsForeman          ?? null,
-    remittance_id:        input.remittanceId            ?? null,
   };
 }
 
@@ -158,11 +160,30 @@ export function useSavings() {
     [toast],
   );
 
+  // ── Link to remittance (patches only remittance_id — requires migration) ──
+  const linkToRemittance = useCallback(
+    async (id: string, remittanceId: string | null): Promise<boolean> => {
+      const { error } = await supabase
+        .from('savings')
+        .update({ remittance_id: remittanceId })
+        .eq('id', id);
+      if (error) {
+        toast(`Failed to link savings: ${error.message}`, 'error');
+        return false;
+      }
+      setSavings((prev) =>
+        prev.map((s) => (s.id === id ? { ...s, remittanceId } : s)),
+      );
+      return true;
+    },
+    [toast],
+  );
+
   // ── Derived totals ──
   const totalInvested = savings.reduce((s, e) => s + e.amountInvested, 0);
   const totalCurrent  = savings.reduce((s, e) => s + e.currentValue,   0);
   const totalGain     = totalCurrent - totalInvested;
   const gainPct       = totalInvested > 0 ? (totalGain / totalInvested) * 100 : 0;
 
-  return { savings, loading, add, update, remove, totalInvested, totalCurrent, totalGain, gainPct };
+  return { savings, loading, add, update, remove, linkToRemittance, totalInvested, totalCurrent, totalGain, gainPct };
 }
