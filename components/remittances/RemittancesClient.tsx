@@ -2,8 +2,11 @@
 
 import { useState } from 'react';
 import { useRemittances, type RemittanceInput } from '@/hooks/useRemittances';
+import { useSavings } from '@/hooks/useSavings';
+import { useExpenses } from '@/hooks/useExpenses';
 import { useCurrency } from '@/lib/currencyContext';
 import { useSettings } from '@/hooks/useSettings';
+import { calcRemittanceUnallocated } from '@/lib/unallocated';
 import { useRateIntelligence } from '@/hooks/useRateIntelligence';
 import { CURRENCIES, CURRENCY_LIST, formatAmount } from '@/lib/currencies';
 import { getLiveRate } from '@/lib/forex';
@@ -168,6 +171,8 @@ function TransferForm({ initial, defaultFrom, defaultTo, onSubmit, onCancel, sub
 
 export default function RemittancesClient() {
   const { remittances, loading, add, update, remove, totalSent, totalReceived } = useRemittances();
+  const { savings } = useSavings();
+  const { expenses } = useExpenses();
   const { settings } = useSettings();
   const { toDisplay } = useCurrency();
   const { rateContext, rateHistory } = useRateIntelligence();
@@ -282,7 +287,9 @@ export default function RemittancesClient() {
               <p className="text-xs text-gray-500">{toCur ? formatAmount(monthTotal, homeCurrency) : monthTotal.toLocaleString('en-IN')}</p>
             </div>
             <div className="space-y-2">
-              {groups[gk].map((r) => (
+              {groups[gk].map((r) => {
+                const unalloc = calcRemittanceUnallocated(r, expenses, savings);
+                return (
                 <div key={r.id}
                   className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between gap-3">
@@ -297,6 +304,16 @@ export default function RemittancesClient() {
                         <span className="text-sm font-semibold text-emerald-700">
                           {CURRENCIES[r.toCurrency]?.flag ?? ''} {formatAmount(r.toAmount, r.toCurrency)}
                         </span>
+                        {unalloc > 0 && (
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                            {toDisplay(unalloc)} unallocated
+                          </span>
+                        )}
+                        {unalloc <= 0 && (
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
+                            fully allocated ✓
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-gray-400">
                         {formatDate(r.transferDate)}
@@ -343,7 +360,8 @@ export default function RemittancesClient() {
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           </div>
         );

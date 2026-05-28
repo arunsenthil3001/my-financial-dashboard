@@ -10,8 +10,9 @@ import { useCurrency } from '@/lib/currencyContext';
 import { useSettings } from '@/hooks/useSettings';
 import { useRateIntelligence } from '@/hooks/useRateIntelligence';
 import { useChitCycles } from '@/hooks/useChitCycles';
-import { formatDate, formatShortDate, daysUntil, addMonths, isThisMonth } from '@/lib/utils';
-import { EXPENSE_CATEGORY_COLORS, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
+import { formatDate, formatShortDate, daysUntil, addMonths } from '@/lib/utils';
+import { calcTotalUnallocated } from '@/lib/unallocated';
+import MonthlyScorecard from '@/components/dashboard/MonthlyScorecard';
 import {
   parseFDMeta, fdMaturityDate, calcFDValue,
 } from '@/lib/notesParsers';
@@ -51,8 +52,8 @@ type NeedsAttentionIdle = {
 type NeedsAttentionItem = NeedsAttentionChit | NeedsAttentionFD | NeedsAttentionIdle;
 
 export default function DashboardClient() {
-  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct, update: updateSaving, linkToRemittance: linkSavingToRemittance } = useSavings();
-  const { expenses, loading: expensesLoading, add, monthlyTotal, monthlyTrend, linkToRemittance: linkExpenseToRemittance } = useExpenses();
+  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct, update: updateSaving } = useSavings();
+  const { expenses, loading: expensesLoading, add } = useExpenses();
   const { remittances, loading: remittancesLoading } = useRemittances();
   const { current: currentSalary } = useSalary();
   const { toDisplay, homeCurrency, earningCurrency, liveRate } = useCurrency();
@@ -88,42 +89,11 @@ export default function DashboardClient() {
     }, 0);
   }, [savings]);
 
-  // ── Monthly scorecard ─────────────────────────────────────────────────────
-  const monthlyScorecard = useMemo(() => {
-    const salary = currentSalary
-      ? (earningCurrency === homeCurrency ? currentSalary.netAmount
-        : currentSalary.netAmount * (liveRate ?? 1))
-      : null;
-
-    const thisMonthExpenses = expenses.filter((e) => isThisMonth(e.date));
-    const homeExpenses   = thisMonthExpenses.filter((e) => e.currency === homeCurrency)
-      .reduce((s, e) => s + e.homeAmount, 0);
-    const abroadExpenses = thisMonthExpenses.filter((e) => e.currency !== homeCurrency)
-      .reduce((s, e) => s + e.homeAmount, 0);
-
-    const thisMonthRemitted = remittances
-      .filter((r) => isThisMonth(r.transferDate) && r.toCurrency === homeCurrency)
-      .reduce((s, r) => s + r.toAmount, 0);
-
-    const savingsRate = salary && salary > 0
-      ? ((thisMonthRemitted / salary) * 100) : null;
-
-    return { salary, homeExpenses, abroadExpenses, thisMonthRemitted, savingsRate };
-  }, [currentSalary, expenses, remittances, homeCurrency, earningCurrency, liveRate]);
-
-  // ── Unallocated pool (per-remittance breakdown) ───────────────────────────
-  const unallocatedPool = useMemo(() => {
-    const totalRemittedHome = remittances
-      .filter((r) => r.toCurrency === homeCurrency)
-      .reduce((s, r) => s + r.toAmount, 0);
-    const linkedExpenses = expenses
-      .filter((e) => e.remittanceId !== null)
-      .reduce((s, e) => s + e.homeAmount, 0);
-    const linkedSavings = savings
-      .filter((sv) => sv.remittanceId !== null)
-      .reduce((s, sv) => s + sv.amountInvested, 0);
-    return Math.max(0, totalRemittedHome - linkedExpenses - linkedSavings);
-  }, [remittances, expenses, savings, homeCurrency]);
+  // ── Unallocated pool ─────────────────────────────────────────────────────
+  const unallocatedPool = useMemo(
+    () => calcTotalUnallocated(remittances, expenses, savings, homeCurrency),
+    [remittances, expenses, savings, homeCurrency],
+  );
 
   // ── Needs Attention items ─────────────────────────────────────────────────
   const needsAttentionItems = useMemo((): NeedsAttentionItem[] => {
@@ -266,17 +236,11 @@ export default function DashboardClient() {
     );
   }
 
-  const isPositive     = totalGain >= 0;
-  const recentExpenses = expenses.slice(0, 5);
+  const isPositive = totalGain >= 0;
 
-  const hour         = new Date().getHours();
+  const hour = new Date().getHours();
   const greeting     = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const todayLabel   = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  const lastMonthData = monthlyTrend[monthlyTrend.length - 2];
-  const spendChange   = lastMonthData?.total > 0
-    ? ((monthlyTotal - lastMonthData.total) / lastMonthData.total) * 100
-    : null;
 
   return (
     <div className="space-y-5">
@@ -323,58 +287,15 @@ export default function DashboardClient() {
       </div>
 
       {/* ── Monthly Scorecard ── */}
-      {(monthlyScorecard.salary !== null || monthlyScorecard.thisMonthRemitted > 0) && (
-        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
-            <span className="text-xs text-gray-400">
-              {new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            {monthlyScorecard.salary !== null && (
-              <div className="bg-indigo-50 rounded-xl p-3">
-                <p className="text-xs text-indigo-500 mb-0.5">Salary</p>
-                <p className="text-sm font-bold text-indigo-900">{toDisplay(monthlyScorecard.salary)}</p>
-              </div>
-            )}
-            {monthlyScorecard.abroadExpenses > 0 && (
-              <div className="bg-orange-50 rounded-xl p-3">
-                <p className="text-xs text-orange-500 mb-0.5">Abroad Expenses</p>
-                <p className="text-sm font-bold text-orange-900">{toDisplay(monthlyScorecard.abroadExpenses)}</p>
-              </div>
-            )}
-            {monthlyScorecard.thisMonthRemitted > 0 && (
-              <div className="bg-emerald-50 rounded-xl p-3">
-                <p className="text-xs text-emerald-500 mb-0.5">Remitted Home</p>
-                <p className="text-sm font-bold text-emerald-900">{toDisplay(monthlyScorecard.thisMonthRemitted)}</p>
-              </div>
-            )}
-            {monthlyScorecard.homeExpenses > 0 && (
-              <div className="bg-red-50 rounded-xl p-3">
-                <p className="text-xs text-red-400 mb-0.5">Home Expenses</p>
-                <p className="text-sm font-bold text-red-800">{toDisplay(monthlyScorecard.homeExpenses)}</p>
-              </div>
-            )}
-          </div>
-
-          {monthlyScorecard.savingsRate !== null && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-xs text-gray-500">Remittance rate</p>
-                <p className="text-xs font-bold text-indigo-700">{monthlyScorecard.savingsRate.toFixed(1)}%</p>
-              </div>
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-indigo-500 rounded-full transition-all"
-                  style={{ width: `${Math.min(100, monthlyScorecard.savingsRate)}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      <MonthlyScorecard
+        salary={currentSalary}
+        expenses={expenses}
+        remittances={remittances}
+        savings={savings}
+        homeCurrency={homeCurrency}
+        earningCurrency={earningCurrency}
+        liveRate={liveRate}
+      />
 
       {/* ── Unallocated Pool ── */}
       {unallocatedPool > 0 && (
@@ -492,37 +413,6 @@ export default function DashboardClient() {
           })}
         </div>
       )}
-
-      {/* ── Recent expenses ── */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-700">Recent Expenses</h2>
-          <Link href="/expenses" className="text-xs text-indigo-600 font-medium hover:underline">View all →</Link>
-        </div>
-
-        {recentExpenses.length === 0 ? (
-          <p className="text-sm text-gray-400 py-4 text-center">No expenses recorded yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {recentExpenses.map((e) => (
-              <div key={e.id} className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0"
-                  style={{ backgroundColor: EXPENSE_CATEGORY_COLORS[e.category] + '1A' }}>
-                  {EXPENSE_CATEGORY_ICONS[e.category]}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800">{e.category}</p>
-                  {e.notes && <p className="text-xs text-gray-400 truncate">{e.notes}</p>}
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-sm font-semibold text-gray-900">{toDisplay(e.homeAmount)}</p>
-                  <p className="text-xs text-gray-400">{formatShortDate(e.date)}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
       {/* ── Quick add FAB ── */}
       <button
