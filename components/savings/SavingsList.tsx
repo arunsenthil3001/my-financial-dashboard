@@ -50,13 +50,15 @@ function FDDetail({ entry }: { entry: SavingsEntry }) {
 function ChitDetail({ entry }: { entry: SavingsEntry }) {
   const { homeCurrency } = useCurrency();
   const { fetchCycles }  = useChitCycles();
-  // Last actual cycle date fetched from DB (null = not yet loaded / no cycles)
+  // Actual cycle count + last date from DB (null = loading)
+  const [cycleCount,    setCycleCount]    = useState<number | null>(null);
   const [lastCycleDate, setLastCycleDate] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     fetchCycles(entry.id).then((cycles) => {
       if (cancelled) return;
+      setCycleCount(cycles.length);
       const last = cycles[cycles.length - 1];
       if (last?.cycleDate) setLastCycleDate(last.cycleDate);
     });
@@ -71,20 +73,31 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
     const d    = entry.chitDurationMonths;
     const bf   = entry.chitBidFrequency;
     const totalCycles = Math.round(d / bf);
-    const elapsed     = elapsedCycles(entry.startDate, bf);
-    const remaining   = Math.max(0, totalCycles - elapsed);
-    // Next bid: last actual cycle date + bf months; fall back to theoretical if no cycles yet
+
+    // Bug 1: use actual DB cycle count; fall back to schedule formula until loaded
+    const elapsed   = cycleCount ?? elapsedCycles(entry.startDate, bf);
+    const remaining = Math.max(0, totalCycles - elapsed);
+
+    // Next bid from last actual cycle date; fall back to theoretical if not loaded
     const nextBidDate = lastCycleDate
       ? addMonths(lastCycleDate, bf)
       : addMonths(entry.startDate, elapsed * bf);
-    const days        = daysUntil(nextBidDate);
-    const urgent      = days >= 0 && days <= 30;
+    const days  = daysUntil(nextBidDate);
+    const urgent = days >= 0 && days <= 30;
+
     const hasWon      = (entry.chitIsForeman ?? false) || entry.chitWonCycle !== null;
     const bidReceived = entry.chitBidReceived ?? 0;
     const totalPaid   = entry.amountInvested;
-    const netGain     = hasWon ? bidReceived - totalPaid : null;
-    const gainPct     = netGain !== null && totalPaid > 0
-      ? (netGain / totalPaid) * 100 : null;
+
+    // Bug 2: after winning, remaining cycles are still owed at full face value.
+    // Net gain = bid received − (paid so far + future payments)
+    const futurePayments = remaining * fv;
+    const totalCommitted = totalPaid + futurePayments;
+    const netGain = hasWon && bidReceived > 0
+      ? bidReceived - totalCommitted
+      : null;
+    const gainPct = netGain !== null && totalCommitted > 0
+      ? (netGain / totalCommitted) * 100 : null;
 
     return (
       <div className="mt-2 space-y-2">
@@ -113,26 +126,51 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
         </div>
 
         {/* Financials */}
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          <div>
-            <p className="text-gray-400 mb-0.5">Paid so far</p>
-            <p className="font-semibold text-gray-700">{formatAmount(totalPaid, homeCurrency)}</p>
+        {hasWon && bidReceived > 0 ? (
+          /* Won: full committed-vs-received breakdown */
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+            <div>
+              <p className="text-gray-400 mb-0.5">Paid so far</p>
+              <p className="font-semibold text-gray-700">{formatAmount(totalPaid, homeCurrency)}</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Remaining ({remaining})</p>
+              <p className="font-semibold text-gray-700">{formatAmount(futurePayments, homeCurrency)}</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Total committed</p>
+              <p className="font-semibold text-gray-700">{formatAmount(totalCommitted, homeCurrency)}</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Bid received</p>
+              <p className="font-semibold text-gray-700">{formatAmount(bidReceived, homeCurrency)}</p>
+            </div>
+            <div className="col-span-2">
+              <p className="text-gray-400 mb-0.5">Net gain</p>
+              <p className={`font-semibold ${netGain !== null && netGain >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                {netGain !== null
+                  ? `${netGain >= 0 ? '+' : ''}${formatAmount(netGain, homeCurrency)}${gainPct !== null ? ` (${gainPct.toFixed(0)}%)` : ''}`
+                  : '—'}
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-gray-400 mb-0.5">Bid received</p>
-            <p className="font-semibold text-gray-700">
-              {hasWon && bidReceived > 0 ? formatAmount(bidReceived, homeCurrency) : '—'}
-            </p>
+        ) : (
+          /* Ongoing: simple 3-col layout */
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <p className="text-gray-400 mb-0.5">Paid so far</p>
+              <p className="font-semibold text-gray-700">{formatAmount(totalPaid, homeCurrency)}</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Bid received</p>
+              <p className="font-semibold text-gray-700">—</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Net gain</p>
+              <p className="font-semibold text-gray-400">Ongoing</p>
+            </div>
           </div>
-          <div>
-            <p className="text-gray-400 mb-0.5">Net gain</p>
-            <p className={`font-semibold ${netGain !== null ? (netGain >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
-              {netGain !== null
-                ? `${netGain >= 0 ? '+' : ''}${formatAmount(netGain, homeCurrency)}${gainPct !== null ? ` (${gainPct.toFixed(0)}%)` : ''}`
-                : 'Ongoing'}
-            </p>
-          </div>
-        </div>
+        )}
 
         <p className="text-xs text-gray-400">
           {n} members · {CURRENCIES[homeCurrency]?.symbol ?? homeCurrency}{fv.toLocaleString('en-IN')} face value · {d} months
