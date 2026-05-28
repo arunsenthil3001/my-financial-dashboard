@@ -28,7 +28,7 @@ export function elapsedCycles(startDate: string, bidFrequency: number): number {
     // Cycle (count+1) is scheduled at startDate + count * bidFrequency months
     const cycleDate = new Date(addMonths(startDate, count * bidFrequency));
     cycleDate.setHours(0, 0, 0, 0);
-    if (cycleDate >= today) break; // this cycle hasn't happened yet
+    if (cycleDate > today) break; // completed if scheduledDate <= today
     count++;
   }
   return count;

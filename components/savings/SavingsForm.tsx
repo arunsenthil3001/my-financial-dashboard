@@ -71,6 +71,8 @@ interface PastCycleState {
   bidAmountReceived: string;
   impliedBidAmount: number | null;
   commissionDistributed: number | null;
+  /** Actual date the bid happened (editable). Defaults to scheduled date. */
+  cycleDate: string;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -168,6 +170,7 @@ export default function SavingsForm({
       setChitIsForeman(initial.chitIsForeman ?? false);
       // Populate past cycles from initialCycles (if provided for edit mode)
       if (initialCycles?.length) {
+        const bf = initial.chitBidFrequency ?? 0;
         setChitPastCycles(
           initialCycles.map((c) => ({
             cycleNumber: c.cycleNumber,
@@ -177,6 +180,9 @@ export default function SavingsForm({
               c.bidAmountReceived !== null ? String(c.bidAmountReceived) : '',
             impliedBidAmount: null,
             commissionDistributed: null,
+            // Restore actual date; fall back to scheduled date for legacy rows
+            cycleDate: c.cycleDate ??
+              (bf > 0 ? addMonths(initial.startDate, (c.cycleNumber - 1) * bf) : initial.startDate),
           })),
         );
       }
@@ -227,19 +233,23 @@ export default function SavingsForm({
     [startDate, chitBidFreqVal],
   );
 
-  // Sync past-cycle rows to elapsed count whenever step-1 fields change
+  // Sync past-cycle rows to elapsed count whenever step-1 fields change.
+  // cycleDate defaults to the scheduled date; user can override it in Step 2.
   useEffect(() => {
     if (type !== 'Chit Funds') return;
     if (chitElapsed === 0) { setChitPastCycles([]); return; }
-    const fv = Number(chitFaceValue);
-    const n  = Number(chitMembers);
+    const fv   = Number(chitFaceValue);
+    const n    = Number(chitMembers);
     const pool = n * fv;
+    const bf   = chitBidFreqVal;
     setChitPastCycles((prev) => {
       const next: PastCycleState[] = [];
       for (let i = 1; i <= chitElapsed; i++) {
-        const existing = prev.find((c) => c.cycleNumber === i);
+        const existing  = prev.find((c) => c.cycleNumber === i);
+        // Scheduled date for cycle i: startDate + (i-1) × bidFrequency months
+        const scheduled = bf > 0 ? addMonths(startDate, (i - 1) * bf) : startDate;
         if (i === 1) {
-          // Cycle 1 is always locked (foreman cycle)
+          // Cycle 1 is always locked (foreman cycle); preserve actual date if already set
           next.push({
             cycleNumber: 1,
             amountPaid: fv > 0 ? String(fv) : '',
@@ -247,9 +257,10 @@ export default function SavingsForm({
             bidAmountReceived: chitIsForeman && pool > 0 ? String(pool) : '',
             impliedBidAmount: null,
             commissionDistributed: null,
+            cycleDate: existing?.cycleDate ?? scheduled,
           });
         } else if (existing) {
-          next.push(existing);
+          next.push(existing); // cycleDate (and all edits) preserved
         } else {
           next.push({
             cycleNumber: i,
@@ -258,12 +269,14 @@ export default function SavingsForm({
             bidAmountReceived: '',
             impliedBidAmount: null,
             commissionDistributed: null,
+            cycleDate: scheduled,
           });
         }
       }
       return next;
     });
-  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman, startDate, chitBidFreqVal]);
 
   // Back-calculate commission for a cycle row on blur
   function recalcCycleRow(idx: number) {
@@ -304,13 +317,20 @@ export default function SavingsForm({
     const netGain  = bidReceived > 0 ? bidReceived - totalCommitted : null;
     const gainPct  = netGain !== null && totalCommitted > 0
       ? (netGain / totalCommitted) * 100 : null;
-    const nextBidDate = startDate && bf > 0
-      ? addMonths(startDate, chitPastCycles.length * bf) : '';
+    // Next bid = last actual cycle date + bidFrequency months.
+    // If no cycles yet, fall back to startDate + bf (first upcoming cycle).
+    const lastCycle    = chitPastCycles[chitPastCycles.length - 1];
+    const lastBidDate  = lastCycle?.cycleDate || null;
+    const nextBidDate  = bf > 0
+      ? (lastBidDate
+          ? addMonths(lastBidDate, bf)
+          : (startDate ? addMonths(startDate, bf) : ''))
+      : '';
     const daysLeft = nextBidDate ? daysUntil(nextBidDate) : null;
     return {
       totalPaid, projectedRemaining, totalCommitted,
       bidReceived, netGain, gainPct, hasWon,
-      remainingCycles, totalCycles, nextBidDate, daysLeft,
+      remainingCycles, totalCycles, nextBidDate, daysLeft, lastBidDate,
     };
   }, [chitPastCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal,
       chitIsForeman, startDate]);
@@ -439,8 +459,7 @@ export default function SavingsForm({
           totalCommission: totalComm,
           userWon: c.userWon,
           bidAmountReceived: c.userWon ? (Number(c.bidAmountReceived) || null) : null,
-          cycleDate: startDate && bf > 0
-            ? addMonths(startDate, c.cycleNumber * bf) : null,
+          cycleDate: c.cycleDate || null,
         };
       });
 
@@ -705,6 +724,7 @@ export default function SavingsForm({
 
               {chitPastCycles.map((c, idx) => {
                 const isLocked = idx === 0; // Cycle 1 always locked
+                const isLast   = idx === chitPastCycles.length - 1;
                 const fv = Number(chitFaceValue);
                 return (
                   <div key={c.cycleNumber}
@@ -779,6 +799,41 @@ export default function SavingsForm({
                         {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatAmount(c.commissionDistributed ?? 0, homeCurrency)}</span>
                       </p>
                     )}
+
+                    {/* ── Cycle date ── */}
+                    {isLast ? (
+                      /* Last cycle: prominent — drives next bid calculation */
+                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                        <p className="text-xs font-semibold text-indigo-700 mb-1.5">
+                          Actual bid date — used to calculate your next bid date
+                        </p>
+                        <input
+                          type="date"
+                          value={c.cycleDate}
+                          onChange={(e) => setChitPastCycles((prev) => {
+                            const next = [...prev];
+                            next[idx] = { ...next[idx], cycleDate: e.target.value };
+                            return next;
+                          })}
+                          className={inp + ' text-sm bg-white'}
+                        />
+                      </div>
+                    ) : (
+                      /* Non-last cycles: small secondary field */
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1">Cycle date</p>
+                        <input
+                          type="date"
+                          value={c.cycleDate}
+                          onChange={(e) => setChitPastCycles((prev) => {
+                            const next = [...prev];
+                            next[idx] = { ...next[idx], cycleDate: e.target.value };
+                            return next;
+                          })}
+                          className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -819,20 +874,30 @@ export default function SavingsForm({
                 </div>
               )}
 
-              {/* Next bid */}
-              {chitSummary.nextBidDate && (
-                <div className={`rounded-xl px-4 py-3 flex items-center justify-between border ${chitSummary.daysLeft !== null && chitSummary.daysLeft <= 30 && chitSummary.daysLeft >= 0 ? 'bg-red-50 border-red-200' : 'bg-indigo-50 border-indigo-100'}`}>
-                  <div>
-                    <p className="text-xs text-gray-500">Next bid date</p>
-                    <p className="text-sm font-bold text-gray-900">{formatDate(chitSummary.nextBidDate)}</p>
+              {/* Last bid + Next bid */}
+              <div className="space-y-2">
+                {chitSummary.lastBidDate && (
+                  <div className="rounded-xl px-4 py-3 flex items-center justify-between border bg-gray-50 border-gray-100">
+                    <div>
+                      <p className="text-xs text-gray-500">Last bid</p>
+                      <p className="text-sm font-bold text-gray-900">{formatDate(chitSummary.lastBidDate)}</p>
+                    </div>
                   </div>
-                  {chitSummary.daysLeft !== null && chitSummary.daysLeft >= 0 && (
-                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${chitSummary.daysLeft <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-indigo-100 text-indigo-700'}`}>
-                      {chitSummary.daysLeft === 0 ? 'Today!' : `${chitSummary.daysLeft}d away`}
-                    </span>
-                  )}
-                </div>
-              )}
+                )}
+                {chitSummary.nextBidDate && (
+                  <div className={`rounded-xl px-4 py-3 flex items-center justify-between border ${chitSummary.daysLeft !== null && chitSummary.daysLeft <= 30 && chitSummary.daysLeft >= 0 ? 'bg-red-50 border-red-200' : 'bg-indigo-50 border-indigo-100'}`}>
+                    <div>
+                      <p className="text-xs text-gray-500">Next bid date</p>
+                      <p className="text-sm font-bold text-gray-900">{formatDate(chitSummary.nextBidDate)}</p>
+                    </div>
+                    {chitSummary.daysLeft !== null && chitSummary.daysLeft >= 0 && (
+                      <span className={`text-xs font-semibold px-2 py-1 rounded-full ${chitSummary.daysLeft <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-indigo-100 text-indigo-700'}`}>
+                        {chitSummary.daysLeft === 0 ? 'Today!' : `${chitSummary.daysLeft}d away`}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Cycle progress */}
               <div className="bg-gray-50 rounded-xl p-3 flex items-center justify-between text-xs text-gray-500">

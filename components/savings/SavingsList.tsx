@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { SavingsEntry } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
 import { formatDate, daysUntil, addMonths } from '@/lib/utils';
@@ -11,6 +11,7 @@ import {
   parseMFMeta,
 } from '@/lib/notesParsers';
 import { elapsedCycles } from '@/lib/chitFundCalc';
+import { useChitCycles } from '@/hooks/useChitCycles';
 import Badge from '@/components/ui/Badge';
 import EmptyState from '@/components/ui/EmptyState';
 
@@ -48,6 +49,21 @@ function FDDetail({ entry }: { entry: SavingsEntry }) {
 
 function ChitDetail({ entry }: { entry: SavingsEntry }) {
   const { homeCurrency } = useCurrency();
+  const { fetchCycles }  = useChitCycles();
+  // Last actual cycle date fetched from DB (null = not yet loaded / no cycles)
+  const [lastCycleDate, setLastCycleDate] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchCycles(entry.id).then((cycles) => {
+      if (cancelled) return;
+      const last = cycles[cycles.length - 1];
+      if (last?.cycleDate) setLastCycleDate(last.cycleDate);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry.id]);
+
   // New-schema chit (has dedicated columns)
   if (entry.chitMembers && entry.chitFaceValue && entry.chitDurationMonths && entry.chitBidFrequency) {
     const n    = entry.chitMembers;
@@ -57,7 +73,10 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
     const totalCycles = Math.round(d / bf);
     const elapsed     = elapsedCycles(entry.startDate, bf);
     const remaining   = Math.max(0, totalCycles - elapsed);
-    const nextBidDate = addMonths(entry.startDate, elapsed * bf);
+    // Next bid: last actual cycle date + bf months; fall back to theoretical if no cycles yet
+    const nextBidDate = lastCycleDate
+      ? addMonths(lastCycleDate, bf)
+      : addMonths(entry.startDate, elapsed * bf);
     const days        = daysUntil(nextBidDate);
     const urgent      = days >= 0 && days <= 30;
     const hasWon      = (entry.chitIsForeman ?? false) || entry.chitWonCycle !== null;
