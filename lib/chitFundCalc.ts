@@ -75,7 +75,7 @@ export function calcChitGain(
 
   const nextBidDate =
     saving.startDate && bidFrequency > 0
-      ? addMonths(saving.startDate, (cyclesCompleted + 1) * bidFrequency)
+      ? addMonths(saving.startDate, cyclesCompleted * bidFrequency)
       : null;
 
   return {

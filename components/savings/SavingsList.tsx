@@ -57,7 +57,7 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
     const totalCycles = Math.round(d / bf);
     const elapsed     = elapsedCycles(entry.startDate, bf);
     const remaining   = Math.max(0, totalCycles - elapsed);
-    const nextBidDate = addMonths(entry.startDate, (elapsed + 1) * bf);
+    const nextBidDate = addMonths(entry.startDate, elapsed * bf);
     const days        = daysUntil(nextBidDate);
     const urgent      = days >= 0 && days <= 30;
     const hasWon      = (entry.chitIsForeman ?? false) || entry.chitWonCycle !== null;

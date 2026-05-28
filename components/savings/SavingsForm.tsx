@@ -305,7 +305,7 @@ export default function SavingsForm({
     const gainPct  = netGain !== null && totalCommitted > 0
       ? (netGain / totalCommitted) * 100 : null;
     const nextBidDate = startDate && bf > 0
-      ? addMonths(startDate, (chitPastCycles.length + 1) * bf) : '';
+      ? addMonths(startDate, chitPastCycles.length * bf) : '';
     const daysLeft = nextBidDate ? daysUntil(nextBidDate) : null;
     return {
       totalPaid, projectedRemaining, totalCommitted,
