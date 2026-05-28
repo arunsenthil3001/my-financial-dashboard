@@ -244,7 +244,14 @@ export default function SavingsForm({
     const bf   = chitBidFreqVal;
     setChitPastCycles((prev) => {
       const next: PastCycleState[] = [];
-      for (let i = 1; i <= chitElapsed; i++) {
+      // Show at least chitElapsed rows (schedule-based) AND at least prev.length+1 rows
+      // so the user can record a cycle that happened before its scheduled date
+      // (e.g. bid occurred in March when next scheduled date is June).
+      // Cap at totalCycles so we never exceed the chit's duration.
+      const d = Number(chitDuration);
+      const totalCycles = bf > 0 && d > 0 ? Math.round(d / bf) : chitElapsed;
+      const rowCount = Math.min(totalCycles, Math.max(prev.length + 1, chitElapsed));
+      for (let i = 1; i <= rowCount; i++) {
         const existing  = prev.find((c) => c.cycleNumber === i);
         // Scheduled date for cycle i: startDate + (i-1) × bidFrequency months
         const scheduled = bf > 0 ? addMonths(startDate, (i - 1) * bf) : startDate;
@@ -276,7 +283,7 @@ export default function SavingsForm({
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman, startDate, chitBidFreqVal]);
+  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman, startDate, chitBidFreqVal, chitDuration]);
 
   // Back-calculate commission for a cycle row on blur
   function recalcCycleRow(idx: number) {
