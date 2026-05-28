@@ -10,7 +10,6 @@ import {
   calcFDValue, fdMaturityDate,
   type CompoundFrequency,
 } from '@/lib/notesParsers';
-import { elapsedCycles } from '@/lib/chitFundCalc';
 
 // ─── Shared input / label styles ─────────────────────────────────────────────
 
@@ -66,13 +65,15 @@ function StepBar({ step, labels }: { step: number; labels: string[] }) {
 
 interface PastCycleState {
   cycleNumber: number;
+  scheduledDate: string;        // computed, not editable
+  confirmed: boolean;           // user explicitly said "Yes this happened" (cycle 1 = always true)
   amountPaid: string;
+  cycleDate: string;            // actual date entered by user (defaults to scheduledDate)
   userWon: boolean;
   bidAmountReceived: string;
   impliedBidAmount: number | null;
   commissionDistributed: number | null;
-  /** Actual date the bid happened (editable). Defaults to scheduled date. */
-  cycleDate: string;
+  isLocked: boolean;            // true for cycle 1 and all post-win cycles
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -88,6 +89,16 @@ interface Props {
   ) => void;
   onCancel: () => void;
   submitting?: boolean;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function isDatePast(dateStr: string): boolean {
+  const d = new Date(dateStr);
+  d.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d <= today;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -115,12 +126,12 @@ export default function SavingsForm({
   const [fdTenure, setFdTenure]       = useState('');
   const [fdFreq, setFdFreq]           = useState<CompoundFrequency>('quarterly');
 
-  // ── Chit Fund (new schema) ──
-  const [chitStep, setChitStep]           = useState<1 | 2 | 3>(1);
-  const [chitMembers, setChitMembers]     = useState('');
-  const [chitFaceValue, setChitFaceValue] = useState('');
-  const [chitDuration, setChitDuration]   = useState('');
-  const [chitIsForeman, setChitIsForeman] = useState(false);
+  // ── Chit Fund ──
+  const [chitStep, setChitStep]             = useState<1 | 2 | 3>(1);
+  const [chitMembers, setChitMembers]       = useState('');
+  const [chitFaceValue, setChitFaceValue]   = useState('');
+  const [chitDuration, setChitDuration]     = useState('');
+  const [chitIsForeman, setChitIsForeman]   = useState(false);
   const [chitPastCycles, setChitPastCycles] = useState<PastCycleState[]>([]);
 
   // ── MF ──
@@ -168,22 +179,31 @@ export default function SavingsForm({
       setChitFaceValue(String(initial.chitFaceValue ?? ''));
       setChitDuration(String(initial.chitDurationMonths ?? ''));
       setChitIsForeman(initial.chitIsForeman ?? false);
-      // Populate past cycles from initialCycles (if provided for edit mode)
       if (initialCycles?.length) {
-        const bf = initial.chitBidFrequency ?? 0;
+        const bf  = initial.chitBidFrequency ?? 0;
+        const fv  = initial.chitFaceValue ?? 0;
+        const n   = initial.chitMembers ?? 0;
+        const isF = initial.chitIsForeman ?? false;
+        // Pre-populate all DB cycles as confirmed
         setChitPastCycles(
-          initialCycles.map((c) => ({
-            cycleNumber: c.cycleNumber,
-            amountPaid: String(c.amountPaid),
-            userWon: c.userWon,
-            bidAmountReceived:
-              c.bidAmountReceived !== null ? String(c.bidAmountReceived) : '',
-            impliedBidAmount: null,
-            commissionDistributed: null,
-            // Restore actual date; fall back to scheduled date for legacy rows
-            cycleDate: c.cycleDate ??
-              (bf > 0 ? addMonths(initial.startDate, (c.cycleNumber - 1) * bf) : initial.startDate),
-          })),
+          initialCycles.map((c, idx) => {
+            const scheduled = bf > 0 ? addMonths(initial.startDate, (c.cycleNumber - 1) * bf) : initial.startDate;
+            const isFirst   = c.cycleNumber === 1;
+            const wonCycle  = initialCycles.find(x => x.userWon);
+            const isPostWin = !isFirst && !!wonCycle && c.cycleNumber > wonCycle.cycleNumber;
+            return {
+              cycleNumber:           c.cycleNumber,
+              scheduledDate:         scheduled,
+              confirmed:             true,
+              amountPaid:            String(c.amountPaid),
+              cycleDate:             c.cycleDate ?? scheduled,
+              userWon:               c.userWon,
+              bidAmountReceived:     c.bidAmountReceived !== null ? String(c.bidAmountReceived) : '',
+              impliedBidAmount:      null,
+              commissionDistributed: null,
+              isLocked:              isFirst || isPostWin,
+            };
+          }),
         );
       }
     } else if (initial.type === 'Mutual Funds') {
@@ -228,71 +248,164 @@ export default function SavingsForm({
     [chitMembers, chitFaceValue],
   );
 
-  const chitElapsed = useMemo(
-    () => (chitBidFreqVal > 0 ? elapsedCycles(startDate, chitBidFreqVal) : 0),
-    [startDate, chitBidFreqVal],
-  );
+  // ── Cascade helpers ───────────────────────────────────────────────────────
 
-  // Sync past-cycle rows to elapsed count whenever step-1 fields change.
-  // cycleDate defaults to the scheduled date; user can override it in Step 2.
+  // Build next unconfirmed cycle or next post-win locked cycle to append
+  function buildNextCycle(
+    fromCycleDate: string,
+    fromCycleNumber: number,
+    bf: number,
+    fv: number,
+    isPostWin: boolean,
+  ): PastCycleState | null {
+    if (!fromCycleDate || bf <= 0) return null;
+    const nextNum    = fromCycleNumber + 1;
+    const nextSched  = addMonths(fromCycleDate, bf);
+    if (!isDatePast(nextSched)) return null;
+    return {
+      cycleNumber:           nextNum,
+      scheduledDate:         nextSched,
+      confirmed:             isPostWin,
+      amountPaid:            isPostWin ? String(fv) : '',
+      cycleDate:             nextSched,
+      userWon:               false,
+      bidAmountReceived:     '',
+      impliedBidAmount:      null,
+      commissionDistributed: null,
+      isLocked:              isPostWin,
+    };
+  }
+
+  // ── Initialise cycle list when entering step 2 (Step 1 fields change) ────
+  // Only runs when type, bid frequency, face value, or startDate changes.
+  // Preserves confirmed cycle data from previous state.
   useEffect(() => {
     if (type !== 'Chit Funds') return;
-    if (chitElapsed === 0) { setChitPastCycles([]); return; }
-    const fv   = Number(chitFaceValue);
-    const n    = Number(chitMembers);
-    const pool = n * fv;
-    const bf   = chitBidFreqVal;
+    const fv = Number(chitFaceValue);
+    const n  = Number(chitMembers);
+    const bf = chitBidFreqVal;
+    if (!bf || !fv || !n) { setChitPastCycles([]); return; }
+
     setChitPastCycles((prev) => {
-      const next: PastCycleState[] = [];
-      // Show at least chitElapsed rows (schedule-based) AND at least prev.length+1 rows
-      // so the user can record a cycle that happened before its scheduled date
-      // (e.g. bid occurred in March when next scheduled date is June).
-      // Cap at totalCycles so we never exceed the chit's duration.
-      const d = Number(chitDuration);
-      const totalCycles = bf > 0 && d > 0 ? Math.round(d / bf) : chitElapsed;
-      const rowCount = Math.min(totalCycles, Math.max(prev.length + 1, chitElapsed));
-      for (let i = 1; i <= rowCount; i++) {
-        const existing  = prev.find((c) => c.cycleNumber === i);
-        // Scheduled date for cycle i: startDate + (i-1) × bidFrequency months
-        const scheduled = bf > 0 ? addMonths(startDate, (i - 1) * bf) : startDate;
-        if (i === 1) {
-          // Cycle 1 is always locked (foreman cycle); preserve actual date if already set
-          next.push({
-            cycleNumber: 1,
-            amountPaid: fv > 0 ? String(fv) : '',
-            userWon: chitIsForeman,
-            bidAmountReceived: chitIsForeman && pool > 0 ? String(pool) : '',
-            impliedBidAmount: null,
-            commissionDistributed: null,
-            cycleDate: existing?.cycleDate ?? scheduled,
+      // Cycle 1 must have occurred (startDate <= today)
+      if (!isDatePast(startDate)) return [];
+
+      // Rebuild cycle 1
+      const prevC1: PastCycleState = {
+        cycleNumber:           1,
+        scheduledDate:         startDate,
+        confirmed:             true,
+        amountPaid:            String(fv),
+        cycleDate:             prev.find((c) => c.cycleNumber === 1)?.cycleDate ?? startDate,
+        userWon:               chitIsForeman,
+        bidAmountReceived:     chitIsForeman ? String(n * fv) : '',
+        impliedBidAmount:      null,
+        commissionDistributed: null,
+        isLocked:              true,
+      };
+
+      // Restore any confirmed cycles from previous state (for edit mode or after Back)
+      const restoredCycles: PastCycleState[] = [prevC1];
+      for (let i = 2; i <= prev.length; i++) {
+        const p = prev.find((c) => c.cycleNumber === i);
+        if (p && p.confirmed) {
+          // Recalculate scheduled date from previous actual
+          const prevActual = restoredCycles[restoredCycles.length - 1]?.cycleDate ?? startDate;
+          restoredCycles.push({
+            ...p,
+            scheduledDate: addMonths(prevActual, bf),
+            isLocked:      i === 1 || (restoredCycles.some((c) => c.userWon) &&
+              i > (restoredCycles.find((c) => c.userWon)?.cycleNumber ?? Infinity)),
           });
-        } else if (existing) {
-          next.push(existing); // cycleDate (and all edits) preserved
         } else {
-          next.push({
-            cycleNumber: i,
-            amountPaid: fv > 0 ? String(fv) : '',
-            userWon: false,
-            bidAmountReceived: '',
-            impliedBidAmount: null,
-            commissionDistributed: null,
-            cycleDate: scheduled,
-          });
+          break; // stop at first unconfirmed
+        }
+      }
+
+      // Cascade forward from the last confirmed cycle
+      const last         = restoredCycles[restoredCycles.length - 1];
+      const wonCycleNum  = restoredCycles.find((c) => c.userWon)?.cycleNumber ?? null;
+      const nextIsPostWin = wonCycleNum !== null && (last.cycleNumber + 1) > wonCycleNum;
+
+      if (last.confirmed) {
+        const next = buildNextCycle(last.cycleDate, last.cycleNumber, bf, fv, nextIsPostWin);
+        if (next) {
+          if (nextIsPostWin) {
+            // Auto-cascade all remaining elapsed post-win cycles
+            const cascaded = [...restoredCycles, next];
+            let cur = next;
+            while (cur.isLocked && cur.confirmed) {
+              const wonNext = buildNextCycle(cur.cycleDate, cur.cycleNumber, bf, fv, true);
+              if (!wonNext) break;
+              cascaded.push(wonNext);
+              cur = wonNext;
+            }
+            return cascaded;
+          }
+          return [...restoredCycles, next];
+        }
+      }
+      return restoredCycles;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, chitBidFreqVal, chitFaceValue, chitMembers, chitIsForeman, startDate]);
+
+  // ── Confirm a cycle (user clicks "Yes") ──────────────────────────────────
+
+  function confirmCycle(idx: number) {
+    const fv = Number(chitFaceValue);
+    const n  = Number(chitMembers);
+    const bf = chitBidFreqVal;
+    setChitPastCycles((prev) => {
+      const next      = [...prev];
+      next[idx]       = { ...next[idx], confirmed: true };
+      const confirmed = next[idx];
+
+      const wonCycleNum  = next.find((c) => c.userWon)?.cycleNumber ?? null;
+      const nextIsPostWin = wonCycleNum !== null && (confirmed.cycleNumber + 1) > wonCycleNum;
+
+      // Cascade: append next cycle if applicable and not already present
+      if (!next.some((c) => c.cycleNumber === confirmed.cycleNumber + 1)) {
+        const nextCycle = buildNextCycle(confirmed.cycleDate, confirmed.cycleNumber, bf, fv, nextIsPostWin);
+        if (nextCycle) {
+          if (nextIsPostWin) {
+            next.push(nextCycle);
+            let cur = nextCycle;
+            while (cur.isLocked && cur.confirmed) {
+              const further = buildNextCycle(cur.cycleDate, cur.cycleNumber, bf, fv, true);
+              if (!further) break;
+              next.push(further);
+              cur = further;
+            }
+          } else {
+            next.push(nextCycle);
+          }
         }
       }
       return next;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, chitElapsed, chitFaceValue, chitMembers, chitIsForeman, startDate, chitBidFreqVal, chitDuration]);
+  }
 
-  // Back-calculate commission for a cycle row on blur
+  // ── Deny a cycle (user clicks "No" / keeps default No) ───────────────────
+
+  function denyCycle(idx: number) {
+    setChitPastCycles((prev) => {
+      // Remove all cycles from idx onward, keeping only up to (but not including) this one
+      return prev.slice(0, idx + 1).map((c, i) =>
+        i === idx ? { ...c, confirmed: false } : c,
+      );
+    });
+  }
+
+  // ── Back-calculate commission for a confirmed cycle row on blur ───────────
+
   function recalcCycleRow(idx: number) {
     setChitPastCycles((prev) => {
       const next = [...prev];
-      const c = next[idx];
-      if (!c || idx === 0) return prev; // cycle 1 locked
-      const fv = Number(chitFaceValue);
-      const n  = Number(chitMembers);
+      const c    = next[idx];
+      if (!c || c.isLocked) return prev;
+      const fv  = Number(chitFaceValue);
+      const n   = Number(chitMembers);
       const pool = n * fv;
       const amtPaid = Number(c.amountPaid);
       if (!amtPaid || isNaN(amtPaid)) return prev;
@@ -305,42 +418,93 @@ export default function SavingsForm({
     });
   }
 
-  // Chit Step 3 summary
+  // ── When a cycle's userWon changes: propagate post-win lock state ─────────
+
+  function toggleUserWon(idx: number, checked: boolean) {
+    const fv = Number(chitFaceValue);
+    const bf = chitBidFreqVal;
+    setChitPastCycles((prev) => {
+      const next = [...prev];
+      next[idx]  = { ...next[idx], userWon: checked, bidAmountReceived: '' };
+
+      if (!checked) {
+        // Clear post-win lock on subsequent cycles when un-winning
+        for (let i = idx + 1; i < next.length; i++) {
+          next[i] = { ...next[i], isLocked: false, amountPaid: '', confirmed: false };
+        }
+        // Remove cycles beyond this one since they may no longer be valid
+        return next.slice(0, idx + 1);
+      }
+
+      // Mark all subsequent already-in-array cycles as post-win locked
+      for (let i = idx + 1; i < next.length; i++) {
+        next[i] = { ...next[i], isLocked: true, amountPaid: String(fv), confirmed: true };
+      }
+
+      // Cascade remaining elapsed cycles as post-win
+      let cur = next[next.length - 1];
+      while (true) {
+        const further = buildNextCycle(cur.cycleDate, cur.cycleNumber, bf, fv, true);
+        if (!further) break;
+        next.push(further);
+        cur = further;
+      }
+      return next;
+    });
+  }
+
+  // ── Summary (uses only confirmed cycles) ──────────────────────────────────
+
+  const confirmedCycles = useMemo(
+    () => chitPastCycles.filter((c) => c.confirmed || c.cycleNumber === 1),
+    [chitPastCycles],
+  );
+
   const chitSummary = useMemo(() => {
     const fv   = Number(chitFaceValue);
     const n    = Number(chitMembers);
     const d    = Number(chitDuration);
     const bf   = chitBidFreqVal;
-    const totalCycles    = bf > 0 ? Math.round(d / bf) : 0;
-    const totalPaid      = chitPastCycles.reduce((s, c) => s + (Number(c.amountPaid) || 0), 0);
-    const wonCycle       = chitPastCycles.find((c) => c.userWon);
-    const hasWon         = chitIsForeman || !!wonCycle;
-    const bidReceived    = chitIsForeman
+    const totalCycles     = bf > 0 ? Math.round(d / bf) : 0;
+    const cyclesCompleted = confirmedCycles.length;
+    const remainingCycles = Math.max(0, totalCycles - cyclesCompleted);
+
+    const totalPaid    = confirmedCycles.reduce((s, c) => s + (Number(c.amountPaid) || 0), 0);
+    const wonCycle     = confirmedCycles.find((c) => c.userWon);
+    const hasWon       = chitIsForeman || !!wonCycle;
+    const bidReceived  = chitIsForeman
       ? n * fv
       : (wonCycle?.bidAmountReceived ? Number(wonCycle.bidAmountReceived) : 0);
-    const remainingCycles    = Math.max(0, totalCycles - chitPastCycles.length);
-    const projectedRemaining = remainingCycles * fv;
-    const totalCommitted     = totalPaid + projectedRemaining;
-    const netGain  = bidReceived > 0 ? bidReceived - totalCommitted : null;
-    const gainPct  = netGain !== null && totalCommitted > 0
+
+    const futurePayments  = remainingCycles * fv;
+    const totalCommitted  = totalPaid + futurePayments;
+    const netGain         = bidReceived > 0 ? bidReceived - totalCommitted : null;
+    const gainPct         = netGain !== null && totalCommitted > 0
       ? (netGain / totalCommitted) * 100 : null;
-    // Next bid = last actual cycle date + bidFrequency months.
-    // If no cycles yet, fall back to startDate + bf (first upcoming cycle).
-    const lastCycle    = chitPastCycles[chitPastCycles.length - 1];
-    const lastBidDate  = lastCycle?.cycleDate || null;
-    const nextBidDate  = bf > 0
-      ? (lastBidDate
-          ? addMonths(lastBidDate, bf)
-          : (startDate ? addMonths(startDate, bf) : ''))
-      : '';
-    const daysLeft = nextBidDate ? daysUntil(nextBidDate) : null;
+
+    // Projected bid for not-won: most recent implied bid from confirmed cycles, fallback 0.85
+    const lastImplied = [...confirmedCycles]
+      .reverse()
+      .find((c) => c.impliedBidAmount !== null)?.impliedBidAmount ?? null;
+    const projectedBid = !hasWon
+      ? (lastImplied !== null ? lastImplied : (n * fv * 0.85))
+      : null;
+    const projectedGain = projectedBid !== null ? projectedBid - totalCommitted : null;
+
+    // Next bid = last confirmed actualDate + bidFrequency months
+    const lastConfirmed = confirmedCycles[confirmedCycles.length - 1];
+    const lastBidDate   = lastConfirmed?.cycleDate ?? null;
+    const nextBidDate   = bf > 0 && lastBidDate ? addMonths(lastBidDate, bf) : '';
+    const daysLeft      = nextBidDate ? daysUntil(nextBidDate) : null;
+
     return {
-      totalPaid, projectedRemaining, totalCommitted,
+      totalPaid, futurePayments, totalCommitted,
       bidReceived, netGain, gainPct, hasWon,
-      remainingCycles, totalCycles, nextBidDate, daysLeft, lastBidDate,
+      projectedBid, projectedGain,
+      remainingCycles, totalCycles, cyclesCompleted,
+      nextBidDate, daysLeft, lastBidDate,
     };
-  }, [chitPastCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal,
-      chitIsForeman, startDate]);
+  }, [confirmedCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal, chitIsForeman]);
 
   // ── MF derived values ─────────────────────────────────────────────────────
 
@@ -387,17 +551,17 @@ export default function SavingsForm({
 
   function validateChitStep1() {
     let ok = validateCommon();
-    if (!chitMembers || Number(chitMembers) < 2)   { setErr('chitMembers', 'Min 2 members'); ok = false; }
+    if (!chitMembers || Number(chitMembers) < 2)     { setErr('chitMembers', 'Min 2 members'); ok = false; }
     if (!chitFaceValue || Number(chitFaceValue) <= 0) { setErr('chitFaceValue', 'Enter face value'); ok = false; }
-    if (!chitDuration || Number(chitDuration) <= 0) { setErr('chitDuration', 'Enter duration'); ok = false; }
+    if (!chitDuration || Number(chitDuration) <= 0)  { setErr('chitDuration', 'Enter duration'); ok = false; }
     return ok;
   }
 
   function validateChitStep2() {
     const fv = Number(chitFaceValue);
     let ok = true;
-    chitPastCycles.forEach((c, i) => {
-      if (i === 0) return; // cycle 1 locked, always valid
+    confirmedCycles.forEach((c) => {
+      if (c.isLocked) return; // cycle 1 and post-win cycles always valid
       const amt = Number(c.amountPaid);
       if (!c.amountPaid || isNaN(amt) || amt <= 0) {
         setErr(`cycle_${c.cycleNumber}_paid`, 'Enter amount paid'); ok = false;
@@ -414,8 +578,8 @@ export default function SavingsForm({
   function validateMF() {
     let ok = validateCommon();
     if (!mfScheme.trim()) { setErr('mfScheme', 'Scheme name required'); ok = false; }
-    if (!mfUnits || Number(mfUnits) <= 0)       { setErr('mfUnits', 'Enter units'); ok = false; }
-    if (!mfNavBuy || Number(mfNavBuy) <= 0)     { setErr('mfNavBuy', 'Enter NAV at purchase'); ok = false; }
+    if (!mfUnits || Number(mfUnits) <= 0)         { setErr('mfUnits', 'Enter units'); ok = false; }
+    if (!mfNavBuy || Number(mfNavBuy) <= 0)       { setErr('mfNavBuy', 'Enter NAV at purchase'); ok = false; }
     if (!mfCurrentNav || Number(mfCurrentNav) <= 0) { setErr('mfCurrentNav', 'Enter current NAV'); ok = false; }
     return ok;
   }
@@ -447,33 +611,33 @@ export default function SavingsForm({
 
     } else if (type === 'Chit Funds') {
       if (!validateChitStep1()) return;
-      if (chitElapsed > 0 && !validateChitStep2()) return;
+      if (confirmedCycles.length > 1 && !validateChitStep2()) return;
 
       const fv  = Number(chitFaceValue);
       const n   = Number(chitMembers);
       const bf  = chitBidFreqVal;
 
-      const cycles: ChitCycleInput[] = chitPastCycles.map((c) => {
-        const isFirst      = c.cycleNumber === 1;
-        const amtPaid      = Number(c.amountPaid) || 0;
-        const eligible     = Math.max(0, n - c.cycleNumber);
-        const commPerMem   = isFirst ? 0 : Math.max(0, fv - amtPaid);
-        const totalComm    = commPerMem * eligible;
+      // Only submit confirmed cycles
+      const cycles: ChitCycleInput[] = confirmedCycles.map((c) => {
+        const isFirst    = c.cycleNumber === 1;
+        const amtPaid    = Number(c.amountPaid) || 0;
+        const eligible   = Math.max(0, n - c.cycleNumber);
+        const commPerMem = isFirst ? 0 : Math.max(0, fv - amtPaid);
+        const totalComm  = commPerMem * eligible;
         return {
-          cycleNumber: c.cycleNumber,
-          amountPaid: amtPaid,
+          cycleNumber:      c.cycleNumber,
+          amountPaid:       amtPaid,
           commissionReceived: commPerMem,
-          totalCommission: totalComm,
-          userWon: c.userWon,
-          bidAmountReceived: c.userWon ? (Number(c.bidAmountReceived) || null) : null,
-          cycleDate: c.cycleDate || null,
+          totalCommission:    totalComm,
+          userWon:            c.userWon,
+          bidAmountReceived:  c.userWon ? (Number(c.bidAmountReceived) || null) : null,
+          cycleDate:          c.cycleDate || null,
         };
       });
 
       const totalPaid   = cycles.reduce((s, c) => s + c.amountPaid, 0);
       const wonCycle    = cycles.find((c) => c.userWon);
-      const bidReceived = chitIsForeman ? (n * fv)
-        : (wonCycle?.bidAmountReceived ?? 0);
+      const bidReceived = chitIsForeman ? (n * fv) : (wonCycle?.bidAmountReceived ?? 0);
       const hasWon      = chitIsForeman || !!wonCycle;
       const currentValue = hasWon ? bidReceived : totalPaid;
 
@@ -532,27 +696,29 @@ export default function SavingsForm({
 
   // ── Chit step nav ─────────────────────────────────────────────────────────
 
+  // Has at least one non-cycle-1 confirmed cycle or a pending unconfirmed cycle to enter?
+  const hasHistoryToEnter = chitPastCycles.length > 0;
+
   const chitNext = () => {
     setErrors({});
     if (chitStep === 1) {
       if (!validateChitStep1()) return;
-      setChitStep(chitElapsed > 0 ? 2 : 3);
+      setChitStep(hasHistoryToEnter ? 2 : 3);
     } else if (chitStep === 2) {
       if (!validateChitStep2()) return;
       setChitStep(3);
     }
   };
   const chitBack = () => {
-    if (chitStep === 3) setChitStep(chitElapsed > 0 ? 2 : 1);
+    if (chitStep === 3) setChitStep(hasHistoryToEnter ? 2 : 1);
     else setChitStep((s) => Math.max(1, s - 1) as 1 | 2 | 3);
   };
 
   const isChit = type === 'Chit Funds';
-  const stepLabels = chitElapsed > 0
+  const stepLabels = hasHistoryToEnter
     ? ['Fund Basics', 'Past Cycles', 'Summary']
     : ['Fund Basics', 'Summary'];
-  // Map real step (1,2,3) to stepLabel index
-  const stepBarIndex = chitElapsed > 0 ? chitStep : (chitStep === 3 ? 2 : 1);
+  const stepBarIndex = hasHistoryToEnter ? chitStep : (chitStep === 3 ? 2 : 1);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -652,7 +818,7 @@ export default function SavingsForm({
       )}
 
       {/* ════════════════════════════════════════════════════════════
-          CHIT FUND — new 3-step form
+          CHIT FUND — 3-step form
       ════════════════════════════════════════════════════════════ */}
       {type === 'Chit Funds' && (
         <div className="space-y-4">
@@ -686,7 +852,6 @@ export default function SavingsForm({
                 <Err msg={errors.chitDuration} />
               </div>
 
-              {/* Derived info */}
               {chitBidFreqVal > 0 && Number(chitFaceValue) > 0 && (
                 <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 space-y-1.5 text-xs">
                   <div className="flex justify-between text-amber-700">
@@ -697,16 +862,15 @@ export default function SavingsForm({
                     <span>Pool per bid</span>
                     <span className="font-semibold">{formatAmount(chitTotalPool, homeCurrency)}</span>
                   </div>
-                  {chitElapsed > 0 && (
+                  {chitPastCycles.length > 0 && (
                     <div className="flex justify-between text-amber-800 font-medium">
-                      <span>Cycles elapsed (will ask for history)</span>
-                      <span>{chitElapsed}</span>
+                      <span>Cycles to confirm</span>
+                      <span>{chitPastCycles.length}</span>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Foreman toggle */}
               <div className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-xl px-4 py-3">
                 <div>
                   <p className="text-sm font-medium text-amber-900">Are you the foreman?</p>
@@ -725,125 +889,177 @@ export default function SavingsForm({
           {chitStep === 2 && (
             <div className="space-y-3">
               <p className="text-xs text-gray-500">
-                {chitElapsed} bid cycle{chitElapsed !== 1 ? 's' : ''} have occurred since {formatDate(startDate)}.
-                Fill in what you paid each cycle.
+                Confirm each cycle that has occurred. Only confirmed cycles are saved.
               </p>
 
               {chitPastCycles.map((c, idx) => {
-                const isLocked = idx === 0; // Cycle 1 always locked
-                const isLast   = idx === chitPastCycles.length - 1;
-                const fv = Number(chitFaceValue);
+                const fv         = Number(chitFaceValue);
+                const isLast     = idx === chitPastCycles.length - 1;
+                // Pending unconfirmed cycle: cycle N>1 that user hasn't answered yet
+                const isPending  = c.cycleNumber > 1 && !c.confirmed;
+
                 return (
                   <div key={c.cycleNumber}
-                    className={`rounded-xl border p-3 space-y-2 ${isLocked ? 'bg-amber-50 border-amber-100' : 'bg-white border-gray-100'}`}>
+                    className={`rounded-xl border p-3 space-y-2
+                      ${c.isLocked ? 'bg-amber-50 border-amber-100'
+                      : isPending   ? 'bg-gray-50 border-gray-200'
+                      : 'bg-white border-gray-100'}`}>
 
-                    {/* Row header */}
+                    {/* ── Row header ── */}
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-gray-700">
                         Cycle {c.cycleNumber}
-                        {isLocked && <span className="ml-2 text-amber-600 font-normal">Foreman cycle — {chitIsForeman ? 'you took this' : 'foreman took this'}</span>}
+                        {c.isLocked && c.cycleNumber === 1 && (
+                          <span className="ml-2 text-amber-600 font-normal">
+                            Foreman cycle — {chitIsForeman ? 'you took this' : 'foreman took this'}
+                          </span>
+                        )}
+                        {c.isLocked && c.cycleNumber > 1 && (
+                          <span className="ml-2 text-blue-600 font-normal">Full face value (post-win)</span>
+                        )}
                       </span>
-                      {!isLocked && (
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={c.userWon}
-                            onChange={(e) => setChitPastCycles((prev) => {
-                              const next = [...prev];
-                              next[idx] = { ...next[idx], userWon: e.target.checked, bidAmountReceived: '' };
-                              return next;
-                            })}
-                            className="w-4 h-4 accent-indigo-600" />
-                          <span className="text-xs font-medium text-gray-600">I won this cycle</span>
-                        </label>
-                      )}
+                      {/* Scheduled date label */}
+                      <span className="text-xs text-gray-400">
+                        Scheduled: {formatDate(c.scheduledDate)}
+                      </span>
                     </div>
 
-                    {/* Amount paid */}
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1">
-                        <p className="text-xs text-gray-500 mb-1">Amount paid (₹)</p>
-                        <input type="number" min="0" step="any"
-                          value={c.amountPaid}
-                          disabled={isLocked}
-                          placeholder={String(fv || '')}
-                          onChange={(e) => {
-                            setChitPastCycles((prev) => {
-                              const next = [...prev];
-                              next[idx] = { ...next[idx], amountPaid: e.target.value, impliedBidAmount: null, commissionDistributed: null };
-                              return next;
-                            });
-                            clrErr(`cycle_${c.cycleNumber}_paid`);
-                          }}
-                          onBlur={() => recalcCycleRow(idx)}
-                          className={inp + ' text-sm'} />
-                        <Err msg={errors[`cycle_${c.cycleNumber}_paid`]} />
+                    {/* ── Confirmation toggle (non-locked cycles > cycle 1 only) ── */}
+                    {c.cycleNumber > 1 && !c.isLocked && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-600">Has this bid happened?</span>
+                        <button
+                          type="button"
+                          onClick={() => confirmCycle(idx)}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                            c.confirmed ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => denyCycle(idx)}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                            !c.confirmed ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >
+                          No
+                        </button>
                       </div>
-
-                      {/* Bid amount received (if won) */}
-                      {c.userWon && !isLocked && (
-                        <div className="flex-1">
-                          <p className="text-xs text-gray-500 mb-1">Bid amount received (₹)</p>
-                          <input type="number" min="0" step="any"
-                            value={c.bidAmountReceived}
-                            placeholder={String(chitTotalPool || '')}
-                            onChange={(e) => {
-                              setChitPastCycles((prev) => {
-                                const next = [...prev];
-                                next[idx] = { ...next[idx], bidAmountReceived: e.target.value };
-                                return next;
-                              });
-                              clrErr(`cycle_${c.cycleNumber}_bid`);
-                            }}
-                            className={inp + ' text-sm'} />
-                          <Err msg={errors[`cycle_${c.cycleNumber}_bid`]} />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Back-calculated commission hint */}
-                    {!isLocked && c.impliedBidAmount !== null && (
-                      <p className="text-xs text-gray-400">
-                        Implied bid amount: <span className="font-medium text-gray-600">{formatAmount(c.impliedBidAmount, homeCurrency)}</span>
-                        {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatAmount(c.commissionDistributed ?? 0, homeCurrency)}</span>
-                      </p>
                     )}
 
-                    {/* ── Cycle date ── */}
-                    {isLast ? (
-                      /* Last cycle: prominent — drives next bid calculation */
-                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
-                        <p className="text-xs font-semibold text-indigo-700 mb-1.5">
-                          Actual bid date — used to calculate your next bid date
-                        </p>
-                        <input
-                          type="date"
-                          value={c.cycleDate}
-                          onChange={(e) => setChitPastCycles((prev) => {
-                            const next = [...prev];
-                            next[idx] = { ...next[idx], cycleDate: e.target.value };
-                            return next;
-                          })}
-                          className={inp + ' text-sm bg-white'}
-                        />
-                      </div>
-                    ) : (
-                      /* Non-last cycles: small secondary field */
-                      <div>
-                        <p className="text-xs text-gray-400 mb-1">Cycle date</p>
-                        <input
-                          type="date"
-                          value={c.cycleDate}
-                          onChange={(e) => setChitPastCycles((prev) => {
-                            const next = [...prev];
-                            next[idx] = { ...next[idx], cycleDate: e.target.value };
-                            return next;
-                          })}
-                          className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300"
-                        />
-                      </div>
+                    {/* ── Expanded fields (confirmed or cycle 1) ── */}
+                    {(c.confirmed || c.cycleNumber === 1) && (
+                      <>
+                        {/* Amount paid */}
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1">
+                            <p className="text-xs text-gray-500 mb-1">Amount paid (₹) *</p>
+                            <input type="number" min="0" step="any"
+                              value={c.amountPaid}
+                              disabled={c.isLocked}
+                              placeholder={String(fv || '')}
+                              onChange={(e) => {
+                                setChitPastCycles((prev) => {
+                                  const next = [...prev];
+                                  next[idx] = { ...next[idx], amountPaid: e.target.value, impliedBidAmount: null, commissionDistributed: null };
+                                  return next;
+                                });
+                                clrErr(`cycle_${c.cycleNumber}_paid`);
+                              }}
+                              onBlur={() => recalcCycleRow(idx)}
+                              className={inp + ' text-sm'} />
+                            <Err msg={errors[`cycle_${c.cycleNumber}_paid`]} />
+                            {!c.isLocked && c.impliedBidAmount !== null && (
+                              <p className="text-xs text-gray-400 mt-1">
+                                Implied bid: <span className="font-medium text-gray-600">{formatAmount(c.impliedBidAmount, homeCurrency)}</span>
+                                {' '}· Commission distributed: <span className="font-medium text-gray-600">{formatAmount(c.commissionDistributed ?? 0, homeCurrency)}</span>
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Bid amount received (if won) */}
+                          {c.userWon && !c.isLocked && (
+                            <div className="flex-1">
+                              <p className="text-xs text-gray-500 mb-1">Bid amount received (₹) *</p>
+                              <input type="number" min="0" step="any"
+                                value={c.bidAmountReceived}
+                                placeholder={String(chitTotalPool || '')}
+                                onChange={(e) => {
+                                  setChitPastCycles((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = { ...next[idx], bidAmountReceived: e.target.value };
+                                    return next;
+                                  });
+                                  clrErr(`cycle_${c.cycleNumber}_bid`);
+                                }}
+                                className={inp + ' text-sm'} />
+                              <Err msg={errors[`cycle_${c.cycleNumber}_bid`]} />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* I won this cycle (non-locked, non-cycle-1) */}
+                        {!c.isLocked && c.cycleNumber > 1 && (
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" checked={c.userWon}
+                              onChange={(e) => toggleUserWon(idx, e.target.checked)}
+                              className="w-4 h-4 accent-indigo-600" />
+                            <span className="text-xs font-medium text-gray-600">I won this cycle</span>
+                          </label>
+                        )}
+
+                        {/* Cycle date */}
+                        {isLast && !isPending ? (
+                          <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5">
+                            <p className="text-xs font-semibold text-indigo-700 mb-1.5">
+                              Actual bid date — used to calculate your next bid date
+                            </p>
+                            <input
+                              type="date"
+                              value={c.cycleDate}
+                              onChange={(e) => setChitPastCycles((prev) => {
+                                const next = [...prev];
+                                next[idx] = { ...next[idx], cycleDate: e.target.value };
+                                return next;
+                              })}
+                              className={inp + ' text-sm bg-white'}
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="text-xs text-gray-400 mb-1">Cycle date</p>
+                            <input
+                              type="date"
+                              value={c.cycleDate}
+                              onChange={(e) => setChitPastCycles((prev) => {
+                                const next = [...prev];
+                                next[idx] = { ...next[idx], cycleDate: e.target.value };
+                                return next;
+                              })}
+                              className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                            />
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* Pending: show "stop" message */}
+                    {isPending && !c.confirmed && (
+                      <p className="text-xs text-gray-400 italic">
+                        Click Yes to record this cycle, or No to set this as the next upcoming bid.
+                      </p>
                     )}
                   </div>
                 );
               })}
+
+              {chitPastCycles.length === 0 && (
+                <p className="text-xs text-gray-400 text-center py-4">
+                  No cycles to confirm yet — start date may be in the future.
+                </p>
+              )}
             </div>
           )}
 
@@ -853,12 +1069,16 @@ export default function SavingsForm({
               {/* Key numbers */}
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Paid so far', value: formatAmount(chitSummary.totalPaid, homeCurrency) },
-                  { label: 'Projected remaining', value: formatAmount(chitSummary.projectedRemaining, homeCurrency) },
-                  { label: 'Total committed', value: formatAmount(chitSummary.totalCommitted, homeCurrency) },
+                  { label: 'Paid so far',         value: formatAmount(chitSummary.totalPaid, homeCurrency) },
+                  { label: 'Future payments',      value: formatAmount(chitSummary.futurePayments, homeCurrency) },
+                  { label: 'Total committed',      value: formatAmount(chitSummary.totalCommitted, homeCurrency) },
                   {
-                    label: chitSummary.hasWon ? 'Bid received' : 'Bid received',
-                    value: chitSummary.bidReceived > 0 ? formatAmount(chitSummary.bidReceived, homeCurrency) : '—',
+                    label: chitSummary.hasWon ? 'Bid received' : 'Projected bid',
+                    value: chitSummary.hasWon && chitSummary.bidReceived > 0
+                      ? formatAmount(chitSummary.bidReceived, homeCurrency)
+                      : chitSummary.projectedBid !== null
+                        ? `~${formatAmount(chitSummary.projectedBid, homeCurrency)}`
+                        : '—',
                   },
                 ].map(({ label, value }) => (
                   <div key={label} className="bg-gray-50 rounded-xl p-3">
@@ -868,7 +1088,7 @@ export default function SavingsForm({
                 ))}
               </div>
 
-              {/* Net gain */}
+              {/* Net gain (won) */}
               {chitSummary.netGain !== null && (
                 <div className={`rounded-xl p-3 flex items-center justify-between ${chitSummary.netGain >= 0 ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
                   <span className="text-sm font-medium text-gray-700">Net Gain / Loss</span>
@@ -877,6 +1097,17 @@ export default function SavingsForm({
                     {chitSummary.gainPct !== null && (
                       <span className="text-xs font-normal ml-1">({chitSummary.gainPct.toFixed(1)}%)</span>
                     )}
+                  </span>
+                </div>
+              )}
+
+              {/* Projected gain (not won) */}
+              {!chitSummary.hasWon && chitSummary.projectedGain !== null && (
+                <div className="rounded-xl p-3 flex items-center justify-between bg-indigo-50 border border-indigo-100">
+                  <span className="text-sm font-medium text-gray-700">Projected Gain</span>
+                  <span className={`text-base font-bold ${chitSummary.projectedGain >= 0 ? 'text-indigo-700' : 'text-red-600'}`}>
+                    ~{chitSummary.projectedGain >= 0 ? '+' : ''}{formatAmount(chitSummary.projectedGain, homeCurrency)}
+                    <span className="text-xs font-normal ml-1 text-indigo-400">(est.)</span>
                   </span>
                 </div>
               )}
@@ -910,7 +1141,7 @@ export default function SavingsForm({
               <div className="bg-gray-50 rounded-xl p-3 flex items-center justify-between text-xs text-gray-500">
                 <span>Cycles completed</span>
                 <span className="font-semibold text-gray-800">
-                  {chitPastCycles.length} of {chitSummary.totalCycles}
+                  {chitSummary.cyclesCompleted} of {chitSummary.totalCycles}
                 </span>
               </div>
             </div>
@@ -1060,7 +1291,6 @@ export default function SavingsForm({
           ACTION BUTTONS
       ════════════════════════════════════════════════════════════ */}
       <div className="flex gap-3 pt-2">
-        {/* Left: back or cancel */}
         {isChit && chitStep > 1 ? (
           <button type="button" onClick={chitBack}
             className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
@@ -1073,7 +1303,6 @@ export default function SavingsForm({
           </button>
         )}
 
-        {/* Right: next or submit */}
         {isChit && chitStep < 3 ? (
           <button type="button" onClick={chitNext}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">

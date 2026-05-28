@@ -42,30 +42,16 @@ const tabs = [
       </svg>
     ),
   },
-  {
-    href: '/settings',
-    label: 'Settings',
-    icon: (active: boolean) => (
-      <svg className="w-6 h-6" fill={active ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={active ? 0 : 1.75}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
-  },
 ];
-
-// ── Currency toggle pill ──────────────────────────────────────────────────────
 
 function CurrencyToggle() {
   const { homeCurrency, earningCurrency, display, toggle, liveRate } = useCurrency();
 
-  // Only show toggle if currencies differ
   if (homeCurrency === earningCurrency) return null;
 
-  const activeCode  = display === 'home' ? homeCurrency : earningCurrency;
-  const activeCur   = CURRENCIES[activeCode];
-  const flag        = activeCur?.flag ?? '';
-  const symbol      = activeCur?.symbol ?? activeCode;
+  const activeCode = display === 'home' ? homeCurrency : earningCurrency;
+  const activeCur  = CURRENCIES[activeCode];
+  const flag       = activeCur?.flag ?? '';
 
   return (
     <button
@@ -82,7 +68,24 @@ function CurrencyToggle() {
   );
 }
 
-// ── Main Navigation ───────────────────────────────────────────────────────────
+function GearLink() {
+  const pathname = usePathname();
+  const active   = pathname === '/settings';
+  return (
+    <Link
+      href="/settings"
+      aria-label="Settings"
+      className={`p-1.5 rounded-lg transition-colors ${
+        active ? 'text-indigo-600 bg-indigo-50' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-50'
+      }`}
+    >
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      </svg>
+    </Link>
+  );
+}
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -104,9 +107,7 @@ export default function Navigation() {
                   key={href}
                   href={href}
                   className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                    active
-                      ? 'bg-indigo-50 text-indigo-700'
-                      : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                    active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
                   }`}
                 >
                   {label}
@@ -114,7 +115,10 @@ export default function Navigation() {
               );
             })}
           </nav>
-          <CurrencyToggle />
+          <div className="flex items-center gap-2">
+            <CurrencyToggle />
+            <GearLink />
+          </div>
         </div>
       </header>
 
@@ -125,7 +129,10 @@ export default function Navigation() {
             <span className="text-lg">💰</span>
             <span className="font-bold text-gray-900 text-sm tracking-tight">My Financial Dashboard</span>
           </div>
-          <CurrencyToggle />
+          <div className="flex items-center gap-2">
+            <CurrencyToggle />
+            <GearLink />
+          </div>
         </div>
       </header>
 

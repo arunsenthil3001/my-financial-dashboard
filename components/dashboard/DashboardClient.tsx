@@ -9,103 +9,109 @@ import { useSalary } from '@/hooks/useSalary';
 import { useCurrency } from '@/lib/currencyContext';
 import { useSettings } from '@/hooks/useSettings';
 import { useRateIntelligence } from '@/hooks/useRateIntelligence';
-import { formatCurrency, formatDate, formatShortDate, daysUntil, addMonths, isThisMonth } from '@/lib/utils';
-import { formatAmount } from '@/lib/currencies';
-import { SAVINGS_TYPE_COLORS } from '@/lib/types';
+import { useChitCycles } from '@/hooks/useChitCycles';
+import { formatDate, formatShortDate, daysUntil, addMonths, isThisMonth } from '@/lib/utils';
 import { EXPENSE_CATEGORY_COLORS, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
 import {
-  parseFDMeta, fdMaturityDate,
-  parseMFMeta,
+  parseFDMeta, fdMaturityDate, calcFDValue,
 } from '@/lib/notesParsers';
 import { elapsedCycles } from '@/lib/chitFundCalc';
 import Modal from '@/components/ui/Modal';
 import ExpenseForm from '@/components/expenses/ExpenseForm';
+import SavingsForm from '@/components/savings/SavingsForm';
 import RateAlertBanner from '@/components/dashboard/RateAlertBanner';
-import AllocateModal from '@/components/dashboard/AllocateModal';
-import type { ExpenseEntry } from '@/lib/types';
+import type { SavingsEntry, ChitCycle, ChitCycleInput, ExpenseEntry, RemittanceEntry } from '@/lib/types';
 import type { ExpenseInput } from '@/hooks/useExpenses';
 
+// ── Needs-attention item types ────────────────────────────────────────────────
+
+type NeedsAttentionChit = {
+  kind: 'chit';
+  saving: SavingsEntry;
+  nextBidDate: string;
+  daysLeft: number;
+};
+
+type NeedsAttentionFD = {
+  kind: 'fd';
+  saving: SavingsEntry;
+  maturityDate: string;
+  daysLeft: number;
+  invested: number;
+  maturityValue: number;
+};
+
+type NeedsAttentionIdle = {
+  kind: 'idle';
+  remittance: RemittanceEntry;
+  unallocated: number;
+  daysSince: number;
+};
+
+type NeedsAttentionItem = NeedsAttentionChit | NeedsAttentionFD | NeedsAttentionIdle;
+
 export default function DashboardClient() {
-  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct, linkToRemittance: linkSavingToRemittance } = useSavings();
+  const { savings, loading: savingsLoading, totalCurrent, totalInvested, totalGain, gainPct, update: updateSaving, linkToRemittance: linkSavingToRemittance } = useSavings();
   const { expenses, loading: expensesLoading, add, monthlyTotal, monthlyTrend, linkToRemittance: linkExpenseToRemittance } = useExpenses();
   const { remittances, loading: remittancesLoading } = useRemittances();
   const { current: currentSalary } = useSalary();
   const { toDisplay, homeCurrency, earningCurrency, liveRate } = useCurrency();
   const { settings, update: updateSettings } = useSettings();
   const { rateContext } = useRateIntelligence();
+  const { fetchCycles, replaceCycles } = useChitCycles();
 
-  const [quickAdd, setQuickAdd]           = useState(false);
-  const [quickSubmitting, setQuickSubmitting] = useState(false);
-  const [allocateOpen, setAllocateOpen]   = useState(false);
+  const [quickAdd, setQuickAdd]               = useState(false);
+  const [quickSubmitting, setQuickSubmitting]  = useState(false);
+  const [editOpen, setEditOpen]               = useState(false);
+  const [editEntry, setEditEntry]             = useState<SavingsEntry | null>(null);
+  const [editCycles, setEditCycles]           = useState<ChitCycle[]>([]);
+  const [editSubmitting, setEditSubmitting]   = useState(false);
 
-  // ── useMemo MUST come before any early return (Rules of Hooks) ──
-  const savingsHighlights = useMemo(() => savings.map((s) => {
-    if (s.type === 'FD') {
-      const meta = parseFDMeta(s.notes);
-      if (!meta) return null;
-      const maturity = fdMaturityDate(s.startDate, meta.tenure_months);
-      const days = maturity ? daysUntil(maturity) : null;
-      const gainPct = s.amountInvested > 0
-        ? ((s.currentValue - s.amountInvested) / s.amountInvested) * 100 : 0;
-      return { id: s.id, name: s.name, type: 'FD' as const, meta, maturity, days, gainPct };
-    }
-    if (s.type === 'Chit Funds') {
-      if (s.chitMembers && s.chitBidFrequency) {
-        const elapsed     = elapsedCycles(s.startDate, s.chitBidFrequency);
-        const nextBid     = addMonths(s.startDate, (elapsed + 1) * s.chitBidFrequency);
-        const days        = daysUntil(nextBid);
-        const hasWon      = (s.chitIsForeman ?? false) || s.chitWonCycle !== null;
-        const bidReceived = s.chitBidReceived ?? 0;
-        const totalCommitted = s.amountInvested + (Math.max(0, Math.round((s.chitDurationMonths ?? 0) / s.chitBidFrequency) - elapsed) * (s.chitFaceValue ?? 0));
-        const gainPct = hasWon && totalCommitted > 0
-          ? ((bidReceived - totalCommitted) / totalCommitted) * 100 : null;
-        return { id: s.id, name: s.name, type: 'Chit Funds' as const, nextBid, days, hasWon, gainPct };
+  // ── At Maturity (est.) ────────────────────────────────────────────────────
+  const atMaturity = useMemo(() => {
+    return savings.reduce((sum, s) => {
+      if (s.type === 'FD') {
+        const meta = parseFDMeta(s.notes);
+        if (meta) return sum + calcFDValue(s.amountInvested, meta);
+        return sum + s.currentValue;
       }
-      return null;
-    }
-    if (s.type === 'Mutual Funds') {
-      const meta = parseMFMeta(s.notes);
-      if (!meta) return null;
-      const invested = meta.units * meta.nav_at_purchase;
-      const gainPct = invested > 0 ? ((s.currentValue - invested) / invested) * 100 : 0;
-      return { id: s.id, name: s.name, type: 'Mutual Funds' as const, meta, gainPct };
-    }
-    return null;
-  }).filter(Boolean), [savings]);
+      if (s.type === 'Mutual Funds') {
+        return sum + s.currentValue;
+      }
+      if (s.type === 'Chit Funds') {
+        const hasWon = (s.chitIsForeman ?? false) || s.chitWonCycle !== null;
+        if (hasWon) return sum + (s.chitBidReceived ?? s.currentValue);
+        const projected = (s.chitFaceValue ?? 0) * (s.chitMembers ?? 0) * 0.85;
+        return sum + (projected > 0 ? projected : s.currentValue);
+      }
+      return sum + s.currentValue;
+    }, 0);
+  }, [savings]);
 
-  // ── Monthly scorecard ──
+  // ── Monthly scorecard ─────────────────────────────────────────────────────
   const monthlyScorecard = useMemo(() => {
     const salary = currentSalary
       ? (earningCurrency === homeCurrency ? currentSalary.netAmount
         : currentSalary.netAmount * (liveRate ?? 1))
       : null;
 
-    // This month's expenses in home currency
     const thisMonthExpenses = expenses.filter((e) => isThisMonth(e.date));
-    const homeExpenses  = thisMonthExpenses.filter((e) => e.currency === homeCurrency)
+    const homeExpenses   = thisMonthExpenses.filter((e) => e.currency === homeCurrency)
       .reduce((s, e) => s + e.homeAmount, 0);
     const abroadExpenses = thisMonthExpenses.filter((e) => e.currency !== homeCurrency)
       .reduce((s, e) => s + e.homeAmount, 0);
 
-    // This month's remittances (to-home transfers)
     const thisMonthRemitted = remittances
       .filter((r) => isThisMonth(r.transferDate) && r.toCurrency === homeCurrency)
       .reduce((s, r) => s + r.toAmount, 0);
 
-    // This month's savings (current savings value added this month — approximate: investments)
-    const invested = savings.reduce((s, sv) => s + sv.amountInvested, 0);
-
-    const idle = salary !== null
-      ? Math.max(0, salary - homeExpenses - abroadExpenses - thisMonthRemitted)
-      : null;
-
     const savingsRate = salary && salary > 0
       ? ((thisMonthRemitted / salary) * 100) : null;
 
-    return { salary, homeExpenses, abroadExpenses, thisMonthRemitted, invested, idle, savingsRate };
-  }, [currentSalary, expenses, remittances, savings, homeCurrency, earningCurrency, liveRate]);
+    return { salary, homeExpenses, abroadExpenses, thisMonthRemitted, savingsRate };
+  }, [currentSalary, expenses, remittances, homeCurrency, earningCurrency, liveRate]);
 
-  // ── Unallocated pool (money remitted but not linked to savings/expenses) ──
+  // ── Unallocated pool (per-remittance breakdown) ───────────────────────────
   const unallocatedPool = useMemo(() => {
     const totalRemittedHome = remittances
       .filter((r) => r.toCurrency === homeCurrency)
@@ -119,6 +125,71 @@ export default function DashboardClient() {
     return Math.max(0, totalRemittedHome - linkedExpenses - linkedSavings);
   }, [remittances, expenses, savings, homeCurrency]);
 
+  // ── Needs Attention items ─────────────────────────────────────────────────
+  const needsAttentionItems = useMemo((): NeedsAttentionItem[] => {
+    const today  = new Date();
+    today.setHours(0, 0, 0, 0);
+    const cutoff = new Date(today);
+    cutoff.setDate(cutoff.getDate() + 60);
+
+    const items: NeedsAttentionItem[] = [];
+
+    // 1. Chit bids (show if not already won and nextBidDate ≤ today+60)
+    savings
+      .filter((s) => s.type === 'Chit Funds' && s.chitBidFrequency &&
+        !s.chitWonCycle && !s.chitIsForeman)
+      .forEach((s) => {
+        const elapsed    = elapsedCycles(s.startDate, s.chitBidFrequency!);
+        const nextBidStr = addMonths(s.startDate, elapsed * s.chitBidFrequency!);
+        const nextBidD   = new Date(nextBidStr);
+        nextBidD.setHours(0, 0, 0, 0);
+        if (nextBidD <= cutoff) {
+          items.push({ kind: 'chit', saving: s, nextBidDate: nextBidStr, daysLeft: daysUntil(nextBidStr) });
+        }
+      });
+
+    // 2. Maturing FDs (maturityDate ≤ today+60)
+    savings
+      .filter((s) => s.type === 'FD')
+      .forEach((s) => {
+        const meta = parseFDMeta(s.notes);
+        if (!meta) return;
+        const matStr = fdMaturityDate(s.startDate, meta.tenure_months);
+        if (!matStr) return;
+        const matD = new Date(matStr);
+        matD.setHours(0, 0, 0, 0);
+        if (matD <= cutoff) {
+          items.push({
+            kind: 'fd', saving: s,
+            maturityDate: matStr,
+            daysLeft: daysUntil(matStr),
+            invested: s.amountInvested,
+            maturityValue: calcFDValue(s.amountInvested, meta),
+          });
+        }
+      });
+
+    // 3. Idle unallocated remittances
+    remittances
+      .filter((r) => r.toCurrency === homeCurrency)
+      .forEach((r) => {
+        const linkedExp = expenses
+          .filter((e) => e.remittanceId === r.id)
+          .reduce((s, e) => s + e.homeAmount, 0);
+        const linkedSav = savings
+          .filter((sv) => sv.remittanceId === r.id)
+          .reduce((s, sv) => s + sv.amountInvested, 0);
+        const unalloc = r.toAmount - linkedExp - linkedSav;
+        if (unalloc > 1) {
+          const daysSince = Math.abs(daysUntil(r.transferDate));
+          items.push({ kind: 'idle', remittance: r, unallocated: unalloc, daysSince });
+        }
+      });
+
+    return items;
+  }, [savings, remittances, expenses, homeCurrency]);
+
+  // ── Quick add expense ──
   const handleQuickAdd = async (data: Omit<ExpenseEntry, 'id' | 'createdAt'>) => {
     setQuickSubmitting(true);
     const ok = await add(data as ExpenseInput);
@@ -126,31 +197,58 @@ export default function DashboardClient() {
     if (ok) setQuickAdd(false);
   };
 
-  // ── Rate alert dismissal logic ──
-  const todayRate = rateContext?.todayRate ?? null;
-  const dismissedRate = settings?.rateAlertDismissedRate ?? null;
-  const isDismissed =
+  // ── Edit savings (from Needs Attention) ──
+  const openEditSaving = async (s: SavingsEntry) => {
+    setEditEntry(s);
+    if (s.type === 'Chit Funds') {
+      const cycles = await fetchCycles(s.id);
+      setEditCycles(cycles);
+    } else {
+      setEditCycles([]);
+    }
+    setEditOpen(true);
+  };
+
+  const handleSavingEdit = async (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (!editEntry) return;
+    setEditSubmitting(true);
+    await updateSaving(editEntry.id, data);
+    setEditSubmitting(false);
+    setEditOpen(false);
+    setEditEntry(null);
+  };
+
+  const handleChitEdit = async (
+    data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>,
+    cycles: ChitCycleInput[],
+  ) => {
+    if (!editEntry) return;
+    setEditSubmitting(true);
+    const ok = await updateSaving(editEntry.id, data);
+    if (ok) await replaceCycles(editEntry.id, cycles);
+    setEditSubmitting(false);
+    setEditOpen(false);
+    setEditEntry(null);
+  };
+
+  // ── Rate alert logic ──
+  const todayRate       = rateContext?.todayRate ?? null;
+  const dismissedRate   = settings?.rateAlertDismissedRate ?? null;
+  const isDismissed     =
     settings?.rateAlertDismissedAt !== null &&
     settings?.rateAlertDismissedAt !== undefined &&
-    dismissedRate !== null &&
-    todayRate !== null &&
-    Math.abs(todayRate - dismissedRate) / dismissedRate < 0.005; // within 0.5%
+    dismissedRate !== null && todayRate !== null &&
+    Math.abs(todayRate - dismissedRate) / dismissedRate < 0.005;
 
   const showBanner =
-    !!(rateContext?.shouldAlert) &&
-    !isDismissed &&
-    !!(settings?.rateAlertEnabled) &&
-    earningCurrency !== homeCurrency;
+    !!(rateContext?.shouldAlert) && !isDismissed &&
+    !!(settings?.rateAlertEnabled) && earningCurrency !== homeCurrency;
 
   const handleDismiss = async () => {
     if (!todayRate) return;
-    await updateSettings(
-      { rateAlertDismissedAt: new Date().toISOString(), rateAlertDismissedRate: todayRate },
-      true, // silent — no toast
-    );
+    await updateSettings({ rateAlertDismissedAt: new Date().toISOString(), rateAlertDismissedRate: todayRate }, true);
   };
 
-  // Typical transfer amount: average of past transfers, or 1000 if none
   const typicalTransfer = useMemo(() => {
     const pair = remittances.filter(
       (r) => r.fromCurrency === earningCurrency && r.toCurrency === homeCurrency,
@@ -159,7 +257,7 @@ export default function DashboardClient() {
     return pair.reduce((s, r) => s + r.fromAmount, 0) / pair.length;
   }, [remittances, earningCurrency, homeCurrency]);
 
-  // ── Loading state (after all hooks) ──
+  // ── Loading state ──
   if (savingsLoading || expensesLoading || remittancesLoading) {
     return (
       <div className="flex items-center justify-center h-60">
@@ -168,32 +266,21 @@ export default function DashboardClient() {
     );
   }
 
-  // ── Derived values (plain JS — not hooks, safe after early return) ──
-  const isPositive = totalGain >= 0;
+  const isPositive     = totalGain >= 0;
   const recentExpenses = expenses.slice(0, 5);
-  type TypeBucket = { type: string; value: number; color: string };
-  const buckets = savings.reduce<TypeBucket[]>((acc, s) => {
-    const existing = acc.find((b) => b.type === s.type);
-    if (existing) {
-      existing.value += s.currentValue;
-    } else {
-      acc.push({ type: s.type, value: s.currentValue, color: SAVINGS_TYPE_COLORS[s.type] ?? '#94a3b8' });
-    }
-    return acc;
-  }, []);
 
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const todayLabel = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+  const hour         = new Date().getHours();
+  const greeting     = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const todayLabel   = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
 
   const lastMonthData = monthlyTrend[monthlyTrend.length - 2];
-  const spendChange = lastMonthData?.total > 0
+  const spendChange   = lastMonthData?.total > 0
     ? ((monthlyTotal - lastMonthData.total) / lastMonthData.total) * 100
     : null;
 
   return (
     <div className="space-y-5">
-      {/* ── Rate alert banner (top, above all cards) ── */}
+      {/* ── Rate alert banner ── */}
       {showBanner && rateContext && settings && (
         <RateAlertBanner
           rateContext={rateContext}
@@ -209,39 +296,28 @@ export default function DashboardClient() {
         <p className="text-sm text-gray-400">{todayLabel}</p>
       </div>
 
-      {/* ── Primary cards ── */}
-      <div className="grid grid-cols-2 gap-4">
-        <Link href="/savings"
-          className="col-span-1 bg-indigo-600 rounded-2xl p-5 shadow-md hover:bg-indigo-700 transition-colors cursor-pointer">
-          <p className="text-indigo-200 text-xs font-medium mb-1">Total Savings</p>
-          <p className="text-white text-xl font-bold leading-tight">{toDisplay(totalCurrent)}</p>
-          <p className={`text-xs mt-1.5 font-medium ${isPositive ? 'text-indigo-200' : 'text-red-300'}`}>
-            {isPositive ? '▲' : '▼'} {Math.abs(gainPct).toFixed(1)}% overall returns
-          </p>
-        </Link>
-
-        <Link href="/expenses"
-          className="col-span-1 bg-white border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer">
-          <p className="text-gray-400 text-xs font-medium mb-1">This Month</p>
-          <p className="text-gray-900 text-xl font-bold leading-tight">{toDisplay(monthlyTotal)}</p>
-          {spendChange !== null && (
-            <p className={`text-xs mt-1.5 font-medium ${spendChange > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-              {spendChange > 0 ? '▲' : '▼'} {Math.abs(spendChange).toFixed(0)}% vs last month
-            </p>
-          )}
-        </Link>
-      </div>
-
-      {/* ── Net position card ── */}
-      <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm flex items-center justify-between">
-        <div>
-          <p className="text-xs text-gray-400 mb-0.5">Invested Capital</p>
-          <p className="text-lg font-bold text-gray-900">{toDisplay(totalInvested)}</p>
+      {/* ── Hero: My Portfolio ── */}
+      <div className="bg-indigo-600 rounded-2xl p-5 shadow-md">
+        <p className="text-indigo-200 text-xs font-semibold uppercase tracking-wide mb-4">My Portfolio</p>
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div>
+            <p className="text-indigo-300 text-xs mb-1">Invested</p>
+            <p className="text-white text-base font-bold leading-tight">{toDisplay(totalInvested)}</p>
+          </div>
+          <div>
+            <p className="text-indigo-300 text-xs mb-1">Current Value</p>
+            <p className="text-white text-base font-bold leading-tight">{toDisplay(totalCurrent)}</p>
+          </div>
+          <div>
+            <p className="text-indigo-300 text-xs mb-1">At Maturity</p>
+            <p className="text-white text-base font-bold leading-tight">{toDisplay(atMaturity)}</p>
+            <p className="text-indigo-300 text-xs">est.</p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-gray-400 mb-0.5">Total Gain / Loss</p>
-          <p className={`text-lg font-bold ${isPositive ? 'text-emerald-600' : 'text-red-500'}`}>
-            {isPositive ? '+' : ''}{toDisplay(totalGain)}
+        <div className="border-t border-indigo-500 pt-3">
+          <p className={`text-sm font-semibold ${isPositive ? 'text-indigo-100' : 'text-red-300'}`}>
+            {isPositive ? '+' : ''}{toDisplay(totalGain)} gain
+            <span className="text-indigo-300 font-normal ml-2">· {isPositive ? '+' : ''}{gainPct.toFixed(1)}% overall</span>
           </p>
         </div>
       </div>
@@ -283,7 +359,6 @@ export default function DashboardClient() {
             )}
           </div>
 
-          {/* Savings rate bar */}
           {monthlyScorecard.savingsRate !== null && (
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -303,9 +378,9 @@ export default function DashboardClient() {
 
       {/* ── Unallocated Pool ── */}
       {unallocatedPool > 0 && (
-        <button
-          onClick={() => setAllocateOpen(true)}
-          className="w-full flex items-center justify-between bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm hover:bg-amber-100 active:bg-amber-200 transition-colors text-left"
+        <Link
+          href="/remittances"
+          className="w-full flex items-center justify-between bg-amber-50 border border-amber-200 rounded-2xl p-4 shadow-sm hover:bg-amber-100 transition-colors"
         >
           <div>
             <p className="text-xs font-semibold text-amber-700 mb-0.5">💰 Unallocated Pool</p>
@@ -313,108 +388,103 @@ export default function DashboardClient() {
           </div>
           <div className="text-right shrink-0 ml-3">
             <p className="text-base font-bold text-amber-800">{toDisplay(unallocatedPool)}</p>
-            <p className="text-xs text-amber-600 font-medium">Allocate →</p>
+            <p className="text-xs text-amber-600 font-medium">View transfers →</p>
           </div>
-        </button>
+        </Link>
       )}
 
-      {/* ── Savings breakdown ── */}
-      {buckets.length > 0 && (
-        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-700">Savings Breakdown</h2>
-            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">View all →</Link>
-          </div>
-          <div className="flex h-3 rounded-full overflow-hidden gap-0.5 mb-3">
-            {buckets.map((b) => (
-              <div key={b.type}
-                style={{ flex: b.value / totalCurrent, backgroundColor: b.color }}
-                title={`${b.type}: ${toDisplay(b.value)}`} />
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
-            {buckets.map((b) => (
-              <div key={b.type} className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: b.color }} />
-                <span className="text-xs text-gray-500">
-                  {b.type} · <span className="font-medium text-gray-700">{toDisplay(b.value)}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Savings highlights (FD / Chit / MF smart cards) ── */}
-      {savingsHighlights.length > 0 && (
+      {/* ── Needs Attention ── */}
+      {needsAttentionItems.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-700">Portfolio Highlights</h2>
-            <Link href="/savings" className="text-xs text-indigo-600 font-medium hover:underline">Manage →</Link>
-          </div>
-          {savingsHighlights.map((h) => {
-            if (!h) return null;
-
-            if (h.type === 'FD') {
-              const urgent = h.days !== null && h.days >= 0 && h.days <= 30;
+          <h2 className="text-sm font-semibold text-gray-700">Needs Attention</h2>
+          {needsAttentionItems.map((item, i) => {
+            if (item.kind === 'chit') {
+              const overdue = item.daysLeft < 0;
               return (
-                <div key={h.id} className={`bg-white rounded-xl border shadow-sm px-4 py-3 flex items-center justify-between gap-3 ${urgent ? 'border-red-200' : 'border-gray-100'}`}>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">🏦</span>
-                      <p className="text-sm font-semibold text-gray-900 truncate">{h.name}</p>
+                <button
+                  key={`chit-${item.saving.id}`}
+                  type="button"
+                  onClick={() => openEditSaving(item.saving)}
+                  className={`w-full text-left bg-white rounded-xl border shadow-sm px-4 py-3 hover:shadow-md transition-shadow ${overdue ? 'border-red-200' : 'border-amber-200'}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span>🎟</span>
+                        <p className="text-sm font-semibold text-gray-900 truncate">{item.saving.name}</p>
+                      </div>
+                      {overdue ? (
+                        <p className="text-xs text-red-600 mt-0.5 font-medium">Bid overdue — confirm if it happened</p>
+                      ) : (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Next bid: {formatDate(item.nextBidDate)} · in {item.daysLeft} days
+                        </p>
+                      )}
+                      <p className="text-xs text-amber-600 mt-0.5">Eligible to bid — plan your transfer</p>
                     </div>
-                    <p className="text-xs text-blue-600 mt-0.5">
-                      {h.meta.interest_rate}% p.a. · Matures {h.maturity ? formatDate(h.maturity) : '—'}
-                      {urgent && <span className="text-red-600 font-semibold ml-1">({h.days}d left)</span>}
-                    </p>
+                    <span className={`text-xs font-semibold shrink-0 px-2 py-0.5 rounded-full ${overdue ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {overdue ? `${Math.abs(item.daysLeft)}d overdue` : `${item.daysLeft}d`}
+                    </span>
                   </div>
-                  <span className={`text-sm font-bold shrink-0 ${h.gainPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {h.gainPct >= 0 ? '+' : ''}{h.gainPct.toFixed(2)}%
-                  </span>
-                </div>
+                </button>
               );
             }
 
-            if (h.type === 'Chit Funds') {
-              const urgent = h.days !== null && h.days >= 0 && h.days <= 30;
+            if (item.kind === 'fd') {
+              const overdue = item.daysLeft < 0;
               return (
-                <div key={h.id} className={`bg-white rounded-xl border shadow-sm px-4 py-3 flex items-center justify-between gap-3 ${urgent ? 'border-red-200' : 'border-gray-100'}`}>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">🫙</span>
-                      <p className="text-sm font-semibold text-gray-900 truncate">{h.name}</p>
+                <button
+                  key={`fd-${item.saving.id}`}
+                  type="button"
+                  onClick={() => openEditSaving(item.saving)}
+                  className={`w-full text-left bg-white rounded-xl border shadow-sm px-4 py-3 hover:shadow-md transition-shadow ${overdue ? 'border-red-200' : 'border-blue-200'}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span>🏦</span>
+                        <p className="text-sm font-semibold text-gray-900 truncate">{item.saving.name}</p>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Matures: {formatDate(item.maturityDate)}
+                        {!overdue && ` · in ${item.daysLeft} days`}
+                      </p>
+                      <p className="text-xs text-blue-600 mt-0.5">
+                        {toDisplay(item.invested)} invested → {toDisplay(item.maturityValue)} at maturity
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">Decide where to reinvest</p>
                     </div>
-                    <p className="text-xs text-amber-600 mt-0.5">
-                      {h.hasWon ? 'Bid won ✓' : 'Eligible to bid'}
-                      {h.nextBid && <span className="ml-2 text-gray-500">· Next bid: {formatDate(h.nextBid)}</span>}
-                      {urgent && h.days !== null && <span className="text-red-600 font-semibold ml-1">({h.days}d left)</span>}
-                    </p>
+                    <span className={`text-xs font-semibold shrink-0 px-2 py-0.5 rounded-full ${overdue ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {overdue ? 'Matured' : `${item.daysLeft}d`}
+                    </span>
                   </div>
-                  <span className={`text-sm font-bold shrink-0 ${h.gainPct !== null ? (h.gainPct >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-gray-400'}`}>
-                    {h.gainPct !== null ? `${h.gainPct >= 0 ? '+' : ''}${h.gainPct.toFixed(1)}%` : 'Ongoing'}
-                  </span>
-                </div>
+                </button>
               );
             }
 
-            if (h.type === 'Mutual Funds') {
+            if (item.kind === 'idle') {
               return (
-                <div key={h.id} className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">📈</span>
-                      <p className="text-sm font-semibold text-gray-900 truncate">{h.name}</p>
+                <Link
+                  key={`idle-${item.remittance.id}`}
+                  href="/remittances"
+                  className="block bg-white rounded-xl border border-amber-200 shadow-sm px-4 py-3 hover:shadow-md transition-shadow"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span>💰</span>
+                        <p className="text-sm font-semibold text-gray-900">{toDisplay(item.unallocated)} undeployed</p>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        From your {formatShortDate(item.remittance.transferDate)} transfer · sitting idle for {item.daysSince} day{item.daysSince !== 1 ? 's' : ''}
+                      </p>
+                      <p className="text-xs text-amber-600 mt-0.5">Tag to savings or expenses when you invest it</p>
                     </div>
-                    <p className="text-xs text-purple-600 mt-0.5 truncate">
-                      {h.meta.scheme_name} · {h.meta.units} units · NAV ₹{h.meta.current_nav}
-                      {h.meta.nav_updated_date && <span className="text-gray-400 ml-1">({h.meta.nav_updated_date})</span>}
-                    </p>
+                    <span className="text-xs font-semibold shrink-0 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                      {item.daysSince}d idle
+                    </span>
                   </div>
-                  <span className={`text-sm font-bold shrink-0 ${h.gainPct >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                    {h.gainPct >= 0 ? '▲' : '▼'} {Math.abs(h.gainPct).toFixed(2)}%
-                  </span>
-                </div>
+                </Link>
               );
             }
 
@@ -474,18 +544,22 @@ export default function DashboardClient() {
         />
       </Modal>
 
-      {/* ── Allocate modal ── */}
-      <AllocateModal
-        open={allocateOpen}
-        onClose={() => setAllocateOpen(false)}
-        remittances={remittances}
-        savings={savings}
-        expenses={expenses}
-        onLinkSaving={linkSavingToRemittance}
-        onLinkExpense={linkExpenseToRemittance}
-        homeCurrency={homeCurrency}
-        earningCurrency={earningCurrency}
-      />
+      {/* ── Edit savings modal (from Needs Attention) ── */}
+      <Modal
+        open={editOpen}
+        onClose={() => { setEditOpen(false); setEditEntry(null); }}
+        title="Edit Savings"
+      >
+        <SavingsForm
+          initial={editEntry}
+          initialCycles={editCycles}
+          remittances={remittances}
+          onSubmit={handleSavingEdit}
+          onChitSubmit={handleChitEdit}
+          onCancel={() => { setEditOpen(false); setEditEntry(null); }}
+          submitting={editSubmitting}
+        />
+      </Modal>
     </div>
   );
 }
