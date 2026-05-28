@@ -8,15 +8,30 @@ import { addMonths } from './utils';
 import type { SavingsEntry, ChitCycle } from './types';
 
 // ── How many bid cycles have elapsed since startDate ─────────────────────────
+//
+// A cycle N is considered completed if its scheduled date is strictly before today:
+//   Cycle 1 (foreman): scheduled at startDate            → completed if startDate < today
+//   Cycle 2:           scheduled at startDate + 1×bf     → completed if that date < today
+//   Cycle N:           scheduled at startDate + (N-1)×bf → completed if that date < today
+//
+// The old month-arithmetic approach (floor(monthsDiff / bf)) was off by one whenever
+// the Nth cycle's actual date had passed but the raw month count hadn't yet crossed
+// the next multiple (e.g. 17 months elapsed, bf=6 → floor=2, but cycle 3 date
+// (startDate+12 months) had already passed).
 
 export function elapsedCycles(startDate: string, bidFrequency: number): number {
   if (!startDate || bidFrequency <= 0) return 0;
-  const start = new Date(startDate);
-  const now = new Date();
-  const monthsDiff =
-    (now.getFullYear() - start.getFullYear()) * 12 +
-    (now.getMonth() - start.getMonth());
-  return Math.max(0, Math.floor(monthsDiff / bidFrequency));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let count = 0;
+  while (count < 1000) {
+    // Cycle (count+1) is scheduled at startDate + count * bidFrequency months
+    const cycleDate = new Date(addMonths(startDate, count * bidFrequency));
+    cycleDate.setHours(0, 0, 0, 0);
+    if (cycleDate >= today) break; // this cycle hasn't happened yet
+    count++;
+  }
+  return count;
 }
 
 // ── Full gain calculation ─────────────────────────────────────────────────────

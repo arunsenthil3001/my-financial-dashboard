@@ -72,7 +72,7 @@ function ChitDetail({ entry }: { entry: SavingsEntry }) {
         {/* Cycle progress + next bid */}
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
           <span className="text-amber-700 font-medium">
-            Cycle {elapsed} of {totalCycles} · {remaining} remaining
+            Cycles completed: {elapsed} of {totalCycles} · {remaining} remaining
           </span>
           {entry.chitIsForeman && (
             <span className="text-amber-600">🏦 Foreman</span>
