@@ -178,7 +178,11 @@ export default function SettingsClient() {
     setSyncing(true);
     setSyncDone(false);
     const res = await fetch('/api/upstox/sync', { method: 'POST' });
-    if (res.ok) {
+    if (res.status === 401) {
+      // Token expired and could not be refreshed — reset to disconnected
+      setUpstoxConnected(false);
+      setUpstoxLastSynced(null);
+    } else if (res.ok) {
       const data = await res.json() as { updated_at?: string };
       if (data.updated_at) setUpstoxLastSynced(data.updated_at);
       setSyncDone(true);

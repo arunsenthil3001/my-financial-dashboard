@@ -14,6 +14,7 @@ interface UpstoxTokenResponse {
 }
 
 export async function GET(request: NextRequest) {
+  console.log('[Upstox] Callback route hit - starting sync');
   const url   = new URL(request.url);
   const code  = url.searchParams.get('code');
   const state = url.searchParams.get('state');
@@ -72,8 +73,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL('/settings?upstox=error&reason=fetch_error', request.url));
   }
 
-  // Upstox v2 tokens are valid until end of trading day — default to 24h
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  // 23h conservative buffer — Upstox tokens expire at end of trading day
+  const expiresAt = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
   const now       = new Date().toISOString();
 
   const adminClient = createClient(
@@ -98,9 +99,11 @@ export async function GET(request: NextRequest) {
 
   // Trigger immediate holdings sync (best-effort)
   try {
+    console.log('[Upstox] Starting holdings sync...');
     await syncHoldingsForUser(null, accessToken);
+    console.log('[Upstox] Holdings sync complete');
   } catch (err) {
-    console.error('Upstox initial sync error:', err);
+    console.error('[Upstox] Holdings sync failed:', err);
   }
 
   const response = NextResponse.redirect(new URL('/savings?upstox=connected', request.url));

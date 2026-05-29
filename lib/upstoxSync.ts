@@ -10,6 +10,40 @@ const serviceClient = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
+// ── Token refresh ─────────────────────────────────────────────────────────────
+
+/**
+ * Attempts a refresh_token grant. Returns the new access token on success,
+ * null on any failure (Upstox v2 rarely issues refresh tokens, so this is
+ * best-effort). On success, updates the DB row immediately.
+ */
+export async function refreshAccessToken(tokenId: string, refreshToken: string): Promise<string | null> {
+  try {
+    const res = await fetch('https://api.upstox.com/v2/login/authorization/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({
+        grant_type:    'refresh_token',
+        client_id:     process.env.UPSTOX_CLIENT_ID     ?? '',
+        client_secret: process.env.UPSTOX_CLIENT_SECRET ?? '',
+        refresh_token: refreshToken,
+      }),
+    });
+    if (!res.ok) return null;
+    const body = await res.json() as { data?: { access_token?: string } };
+    const newToken = body.data?.access_token ?? null;
+    if (!newToken) return null;
+    const expiresAt = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
+    await serviceClient
+      .from('upstox_tokens')
+      .update({ access_token: newToken, expires_at: expiresAt, updated_at: new Date().toISOString() })
+      .eq('id', tokenId);
+    return newToken;
+  } catch {
+    return null;
+  }
+}
+
 // ── Stocks ────────────────────────────────────────────────────────────────────
 
 interface UpstoxHolding {
@@ -143,7 +177,7 @@ export async function syncHoldingsForUser(userId: string | null, accessToken: st
 export async function syncAllUsers(): Promise<{ synced: number; failed: number }> {
   const { data: tokens } = await serviceClient
     .from('upstox_tokens')
-    .select('id, user_id, access_token, expires_at')
+    .select('id, user_id, access_token, refresh_token, expires_at')
     .not('access_token', 'is', null);
 
   if (!tokens?.length) return { synced: 0, failed: 0 };
@@ -155,18 +189,25 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
     try {
       const expiresAt = new Date(token.expires_at as string);
 
-      // Upstox v2 has no refresh tokens — if expired, mark disconnected and skip
+      const userId = (token.user_id as string | null) ?? null;
+      let accessToken = token.access_token as string;
+
       if (expiresAt <= new Date()) {
-        await serviceClient
-          .from('upstox_tokens')
-          .update({ access_token: null })
-          .eq('id', token.id);
-        failed++;
-        continue;
+        const refreshTok = (token.refresh_token as string | null) ?? null;
+        const newToken   = refreshTok
+          ? await refreshAccessToken(token.id as string, refreshTok)
+          : null;
+        if (!newToken) {
+          await serviceClient
+            .from('upstox_tokens')
+            .update({ access_token: null })
+            .eq('id', token.id);
+          failed++;
+          continue;
+        }
+        accessToken = newToken;
       }
 
-      const userId      = (token.user_id as string | null) ?? null;
-      const accessToken = token.access_token as string;
       await syncHoldingsForUser(userId, accessToken);
       synced++;
     } catch {

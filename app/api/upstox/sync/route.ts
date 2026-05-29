@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { syncHoldingsForUser } from '@/lib/upstoxSync';
+import { syncHoldingsForUser, refreshAccessToken } from '@/lib/upstoxSync';
 import { NextResponse } from 'next/server';
 
 export async function POST() {
@@ -10,7 +10,7 @@ export async function POST() {
 
   const { data: token } = await adminClient
     .from('upstox_tokens')
-    .select('access_token, expires_at')
+    .select('id, access_token, refresh_token, expires_at')
     .is('user_id', null)
     .maybeSingle();
 
@@ -18,17 +18,31 @@ export async function POST() {
     return NextResponse.json({ error: 'not_connected' }, { status: 400 });
   }
 
-  const { access_token, expires_at } = token as { access_token: string | null; expires_at: string };
+  const { id, access_token, refresh_token, expires_at } = token as {
+    id: string;
+    access_token: string | null;
+    refresh_token: string | null;
+    expires_at: string;
+  };
 
   if (!access_token) {
     return NextResponse.json({ error: 'not_connected' }, { status: 400 });
   }
 
+  let activeToken = access_token;
+
   if (new Date(expires_at) <= new Date()) {
-    return NextResponse.json({ error: 'token_expired' }, { status: 400 });
+    const newToken = refresh_token
+      ? await refreshAccessToken(id, refresh_token)
+      : null;
+    if (!newToken) {
+      await adminClient.from('upstox_tokens').delete().is('user_id', null);
+      return NextResponse.json({ error: 'token_expired', reconnect: true }, { status: 401 });
+    }
+    activeToken = newToken;
   }
 
-  await syncHoldingsForUser(null, access_token);
+  await syncHoldingsForUser(null, activeToken);
 
   const { data: updated } = await adminClient
     .from('upstox_tokens')
