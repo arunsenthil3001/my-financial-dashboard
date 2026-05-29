@@ -116,22 +116,14 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
       let accessToken = token.access_token as string;
       const expiresAt = new Date(token.expires_at as string);
 
+      // Upstox v2 has no refresh tokens — if expired, mark disconnected and skip
       if (expiresAt <= new Date()) {
-        const refreshed = await refreshToken(token.refresh_token as string);
-        if (!refreshed) {
-          await serviceClient
-            .from('upstox_tokens')
-            .update({ access_token: null })
-            .eq('id', token.id);
-          failed++;
-          continue;
-        }
-        accessToken = refreshed.access_token;
-        await serviceClient.from('upstox_tokens').update({
-          access_token:  refreshed.access_token,
-          refresh_token: refreshed.refresh_token,
-          expires_at:    refreshed.expires_at,
-        }).eq('id', token.id);
+        await serviceClient
+          .from('upstox_tokens')
+          .update({ access_token: null })
+          .eq('id', token.id);
+        failed++;
+        continue;
       }
 
       const userId = (token.user_id as string | null) ?? null;

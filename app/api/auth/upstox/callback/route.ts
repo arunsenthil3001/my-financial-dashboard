@@ -2,13 +2,22 @@ import { createClient } from '@supabase/supabase-js';
 import { syncHoldingsForUser } from '@/lib/upstoxSync';
 import { NextResponse, type NextRequest } from 'next/server';
 
+// Upstox v2 token response: access_token is nested under `data`, no expires_in or refresh_token
+interface UpstoxTokenResponse {
+  status: string;
+  data: {
+    access_token: string;
+    extended_token?: string | null;
+    email?: string;
+    user_id?: string;
+  };
+}
+
 export async function GET(request: NextRequest) {
   const url   = new URL(request.url);
   const code  = url.searchParams.get('code');
   const state = url.searchParams.get('state');
 
-  // State check: warn but don't block — cookie can be lost on some browsers
-  // in a cross-site redirect. Single-user app so CSRF risk is negligible.
   const storedState = request.cookies.get('upstox_state')?.value;
   if (!code) {
     return NextResponse.redirect(new URL('/settings?upstox=error&reason=no_code', request.url));
@@ -26,11 +35,14 @@ export async function GET(request: NextRequest) {
   }
 
   // Exchange code for tokens
-  let tokenData: { access_token: string; refresh_token?: string; expires_in: number };
+  let accessToken: string;
   try {
     const tokenRes = await fetch('https://api.upstox.com/v2/login/authorization/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
       body: new URLSearchParams({
         code,
         client_id:     clientId,
@@ -40,19 +52,28 @@ export async function GET(request: NextRequest) {
       }),
     });
 
-    if (!tokenRes.ok) {
-      const body = await tokenRes.text().catch(() => '');
-      console.error('Upstox token exchange failed:', tokenRes.status, body);
+    const body = await tokenRes.json().catch(() => null);
+
+    if (!tokenRes.ok || !body) {
+      console.error('Upstox token exchange failed:', tokenRes.status, JSON.stringify(body));
       return NextResponse.redirect(new URL('/settings?upstox=error&reason=token_exchange', request.url));
     }
 
-    tokenData = await tokenRes.json() as typeof tokenData;
+    // Upstox v2 wraps the token under `data`
+    const parsed = body as UpstoxTokenResponse;
+    accessToken = parsed.data?.access_token ?? (body as { access_token?: string }).access_token ?? '';
+
+    if (!accessToken) {
+      console.error('Upstox: no access_token in response:', JSON.stringify(body));
+      return NextResponse.redirect(new URL('/settings?upstox=error&reason=no_token', request.url));
+    }
   } catch (err) {
     console.error('Upstox token fetch threw:', err);
     return NextResponse.redirect(new URL('/settings?upstox=error&reason=fetch_error', request.url));
   }
 
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
+  // Upstox v2 tokens are valid until end of trading day — default to 24h
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const now       = new Date().toISOString();
 
   const adminClient = createClient(
@@ -64,8 +85,8 @@ export async function GET(request: NextRequest) {
   await adminClient.from('upstox_tokens').delete().is('user_id', null);
   const { error: insertErr } = await adminClient.from('upstox_tokens').insert({
     user_id:       null,
-    access_token:  tokenData.access_token,
-    refresh_token: tokenData.refresh_token ?? null,
+    access_token:  accessToken,
+    refresh_token: null,
     expires_at:    expiresAt,
     updated_at:    now,
   });
@@ -77,7 +98,7 @@ export async function GET(request: NextRequest) {
 
   // Trigger immediate holdings sync (best-effort)
   try {
-    await syncHoldingsForUser(null, tokenData.access_token);
+    await syncHoldingsForUser(null, accessToken);
   } catch (err) {
     console.error('Upstox initial sync error:', err);
   }
