@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getUserId } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toaster';
 import type { RemittanceEntry } from '@/lib/types';
 
@@ -81,9 +82,10 @@ export function useRemittances() {
 
   const add = useCallback(
     async (input: RemittanceInput): Promise<RemittanceEntry | null> => {
+      const userId = await getUserId();
       const { data, error } = await supabase
         .from('remittances')
-        .insert(inputToRow(input))
+        .insert({ ...inputToRow(input), user_id: userId })
         .select()
         .single();
 

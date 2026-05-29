@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { formatAmount } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
 import type { RateContext } from '@/lib/rateIntelligence';
 import type { UserSettings } from '@/lib/types';
 

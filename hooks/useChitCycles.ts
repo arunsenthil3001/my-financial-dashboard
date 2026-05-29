@@ -2,6 +2,7 @@
 
 import { useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getUserId } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toaster';
 import type { ChitCycle, ChitCycleInput } from '@/lib/types';
 
@@ -61,6 +62,7 @@ export function useChitCycles() {
   const addCycles = useCallback(
     async (savingId: string, inputs: ChitCycleInput[]): Promise<boolean> => {
       if (!inputs.length) return true;
+      const userId = await getUserId();
       const rows = inputs.map((c) => ({
         saving_id: savingId,
         cycle_number: c.cycleNumber,
@@ -70,6 +72,7 @@ export function useChitCycles() {
         user_won: c.userWon,
         bid_amount_received: c.bidAmountReceived,
         cycle_date: c.cycleDate,
+        user_id: userId,
       }));
       const { error } = await supabase.from('chit_cycles').insert(rows);
       if (error) {

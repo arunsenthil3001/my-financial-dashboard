@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSavings } from '@/hooks/useSavings';
 import { useExpenses } from '@/hooks/useExpenses';
@@ -61,9 +61,17 @@ export default function DashboardClient() {
   const { rateContext } = useRateIntelligence();
   const { fetchCycles, replaceCycles } = useChitCycles();
 
+  const [claimBanner, setClaimBanner]          = useState(false);
+  const [claimDone, setClaimDone]             = useState(false);
   const [quickAdd, setQuickAdd]               = useState(false);
   const [quickSubmitting, setQuickSubmitting]  = useState(false);
   const [editOpen, setEditOpen]               = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !localStorage.getItem('dataClaimed')) {
+      setClaimBanner(true);
+    }
+  }, []);
   const [editEntry, setEditEntry]             = useState<SavingsEntry | null>(null);
   const [editCycles, setEditCycles]           = useState<ChitCycle[]>([]);
   const [editSubmitting, setEditSubmitting]   = useState(false);
@@ -242,8 +250,43 @@ export default function DashboardClient() {
   const greeting     = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const todayLabel   = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
 
+  const handleClaim = async () => {
+    await fetch('/api/auth/claim-data', { method: 'POST' });
+    localStorage.setItem('dataClaimed', '1');
+    setClaimBanner(false);
+    setClaimDone(true);
+  };
+
   return (
     <div className="space-y-5">
+      {/* ── Claim data banner ── */}
+      {claimBanner && (
+        <div className="flex items-start gap-3 bg-indigo-50 border border-indigo-200 rounded-2xl p-4">
+          <span className="text-lg shrink-0">🔐</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-indigo-800 mb-0.5">Secure your data</p>
+            <p className="text-xs text-indigo-600">Link your existing records to your account so only you can see them.</p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button onClick={handleClaim}
+              className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors">
+              Claim my data
+            </button>
+            <button onClick={() => { localStorage.setItem('dataClaimed', '1'); setClaimBanner(false); }}
+              className="text-gray-400 hover:text-gray-600">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+      {claimDone && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-xs text-emerald-700 font-medium">
+          ✓ Data linked to your account.
+        </div>
+      )}
+
       {/* ── Rate alert banner ── */}
       {showBanner && rateContext && settings && (
         <RateAlertBanner

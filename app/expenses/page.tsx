@@ -1,7 +1,7 @@
 import ExpensesClient from "@/components/expenses/ExpensesClient";
 
 export const metadata = {
-  title: "Expenses — My Financial Dashboard",
+  title: "Expenses — My Finance Partner",
 };
 
 export default function ExpensesPage() {

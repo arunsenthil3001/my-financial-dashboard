@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getUserId } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toaster';
 import type { SavingsEntry, SavingsType } from '@/lib/types';
 
@@ -104,9 +105,10 @@ export function useSavings() {
   // ── Insert — returns the new entry (truthy) or null (error) ──
   const add = useCallback(
     async (input: SavingsInput): Promise<SavingsEntry | null> => {
+      const userId = await getUserId();
       const { data, error } = await supabase
         .from('savings')
-        .insert(inputToRow(input))
+        .insert({ ...inputToRow(input), user_id: userId })
         .select()
         .single();
 

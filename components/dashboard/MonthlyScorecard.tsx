@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { isThisMonth } from '@/lib/utils';
-import { formatAmount } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
 import type { ExpenseEntry, RemittanceEntry, SalaryEntry, SavingsEntry } from '@/lib/types';
 
 interface Props {
@@ -14,6 +14,31 @@ interface Props {
   homeCurrency: string;
   earningCurrency: string;
   liveRate: number | null;
+}
+
+function pctStr(num: number, denom: number): string {
+  if (!denom || !isFinite(num / denom)) return '';
+  return `${Math.round((num / denom) * 100)}%`;
+}
+
+interface RowProps {
+  tree: string;
+  label: string;
+  amount: string;
+  pct?: string;
+  labelClass?: string;
+  amtClass?: string;
+}
+
+function Row({ tree, label, amount, pct, labelClass = 'text-gray-600', amtClass = 'text-gray-700' }: RowProps) {
+  return (
+    <div className="flex items-baseline gap-1 py-0.5">
+      <span className="font-mono text-gray-300 text-xs w-4 shrink-0 select-none">{tree}</span>
+      <span className={`text-xs flex-1 ${labelClass}`}>{label}</span>
+      <span className={`text-xs tabular-nums font-medium ${amtClass} text-right`}>{amount}</span>
+      <span className="text-xs tabular-nums text-gray-400 w-9 text-right shrink-0">{pct ?? ''}</span>
+    </div>
+  );
 }
 
 export default function MonthlyScorecard({
@@ -32,7 +57,6 @@ export default function MonthlyScorecard({
     );
     const thisMonthExp = expenses.filter(e => isThisMonth(e.date));
 
-    // Abroad = spent in earning currency this month
     const abroadE = thisMonthExp
       .filter(e => e.currency === earningCurrency)
       .reduce((s, e) => s + (e.foreignAmount ?? e.originalAmount), 0);
@@ -42,30 +66,20 @@ export default function MonthlyScorecard({
 
     const remittanceIds = new Set(thisMonthRemittances.map(r => r.id));
 
-    // Savings linked to this month's remittances
     const investedH = savings
       .filter(sv => sv.remittanceId !== null && remittanceIds.has(sv.remittanceId as string))
       .reduce((s, sv) => s + sv.amountInvested, 0);
 
-    // Home expenses this month: home-currency transactions OR linked to any remittance
     const homeExpH = thisMonthExp
       .filter(e => e.currency === homeCurrency || e.remittanceId !== null)
       .reduce((s, e) => s + e.homeAmount, 0);
 
     const unallocH = Math.max(0, remittedH - investedH - homeExpH);
-    const salaryE = salary?.netAmount ?? null;
-    const keptE = salaryE !== null ? salaryE - abroadE - remittedE : null;
+    const salaryE  = salary?.netAmount ?? null;
+    const keptE    = salaryE !== null ? salaryE - abroadE - remittedE : null;
 
     return { abroadE, remittedE, remittedH, investedH, homeExpH, unallocH, salaryE, keptE };
   }, [salary, expenses, remittances, savings, homeCurrency, earningCurrency]);
-
-  // Top-level rows: earning or home currency depending on toggle
-  const fmtTop = (v: number): string =>
-    sameC || showEarning
-      ? formatAmount(v, earningCurrency)
-      : formatAmount(v * (liveRate ?? 1), homeCurrency);
-
-  const fmtH = (v: number): string => formatAmount(v, homeCurrency);
 
   // ─── State 1: No salary ──────────────────────────────────────────────────────
   if (!salary) {
@@ -82,32 +96,50 @@ export default function MonthlyScorecard({
   }
 
   const { abroadE, remittedE, remittedH, investedH, homeExpH, unallocH, salaryE, keptE } = sc;
+  const rate = (liveRate != null && liveRate > 0) ? liveRate : 1;
+
+  // Convert earning-currency value to display (respecting toggle)
+  const fmtE = (v: number) =>
+    sameC || showEarning
+      ? formatAmount(v, earningCurrency)
+      : formatAmount(v * rate, homeCurrency);
+
+  const fmtH = (v: number) => formatAmount(v, homeCurrency);
 
   // ─── State 2: No remittance this month ───────────────────────────────────────
   if (remittedH === 0) {
+    const availableE = salaryE! - abroadE;
     return (
-      <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
+      <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
           <span className="text-xs text-gray-400">{monthLabel}</span>
         </div>
-        <div className="flex items-center justify-between bg-indigo-50 rounded-xl px-3 py-2.5">
-          <span className="text-xs text-indigo-600 font-medium">Salary</span>
-          <span className="text-sm font-bold text-indigo-900">{formatAmount(salaryE!, earningCurrency)}</span>
+        <div className="flex items-baseline gap-1 py-0.5">
+          <span className="font-mono text-gray-300 text-xs w-4 shrink-0 select-none"> </span>
+          <span className="text-xs font-semibold flex-1 text-gray-800">Salary</span>
+          <span className="text-xs tabular-nums font-bold text-gray-900 text-right">{fmtE(salaryE!)}</span>
+          <span className="text-xs tabular-nums text-gray-400 w-9 text-right shrink-0">100%</span>
         </div>
-        <p className="text-xs text-gray-400 text-center py-1">No transfers recorded yet this month.</p>
+        {abroadE > 0 && (
+          <Row tree="├─" label="Abroad expenses" amount={`−${fmtE(abroadE)}`}
+            pct={pctStr(abroadE, salaryE!)} amtClass="text-orange-600" />
+        )}
+        <Row tree="└─" label="Available to remit" amount={fmtE(availableE)}
+          pct={pctStr(availableE, salaryE!)} labelClass="text-indigo-600 font-medium" amtClass="text-indigo-700 font-semibold" />
+        <p className="text-xs text-gray-400 text-center pt-1">No transfers recorded yet this month.</p>
       </div>
     );
   }
 
-  // ─── States 3 / 4 / 5: Full waterfall ────────────────────────────────────────
+  // ─── States 3 / 4 / 5 ────────────────────────────────────────────────────────
   const isOverRemitted  = keptE !== null && keptE < -0.01;
   const isFullyRemitted = keptE !== null && Math.abs(keptE) <= 0.01;
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
+    <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-1">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-1">
         <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">{monthLabel}</span>
@@ -122,73 +154,61 @@ export default function MonthlyScorecard({
         </div>
       </div>
 
-      {/* Waterfall */}
-      <div className="space-y-0.5">
-        {/* Salary */}
-        <div className="flex items-center justify-between py-1.5">
-          <span className="text-sm font-semibold text-gray-800">Salary</span>
-          <span className="text-sm font-bold text-gray-900 tabular-nums">{fmtTop(salaryE!)}</span>
-        </div>
-
-        {/* Level-1 children */}
-        <div className="ml-2 pl-3 border-l-2 border-gray-100 space-y-0.5">
-          {/* Abroad expenses */}
-          {abroadE > 0 && (
-            <div className="flex items-center justify-between py-1">
-              <span className="text-xs text-gray-500">Abroad expenses</span>
-              <span className="text-xs font-medium text-orange-600 tabular-nums">−{fmtTop(abroadE)}</span>
-            </div>
-          )}
-
-          {/* Remitted home */}
-          <div className="flex items-center justify-between py-1">
-            <span className="text-xs font-medium text-gray-700">Remitted home</span>
-            <span className="text-xs font-semibold text-emerald-700 tabular-nums">−{fmtTop(remittedE)}</span>
-          </div>
-
-          {/* Level-2: always home currency */}
-          <div className="ml-2 pl-3 border-l-2 border-emerald-100 space-y-0.5 pb-1">
-            <div className="flex items-center justify-between py-0.5">
-              <span className="text-xs text-gray-400">Invested</span>
-              <span className="text-xs text-gray-600 tabular-nums">{fmtH(investedH)}</span>
-            </div>
-            <div className="flex items-center justify-between py-0.5">
-              <span className="text-xs text-gray-400">Home expenses</span>
-              <span className="text-xs text-gray-600 tabular-nums">{fmtH(homeExpH)}</span>
-            </div>
-            <div className="flex items-center justify-between py-0.5">
-              <span className={`text-xs ${unallocH > 0 ? 'text-amber-600 font-medium' : 'text-gray-400'}`}>
-                Unallocated{unallocH > 0 ? ' ⚠' : ''}
-              </span>
-              <span className={`text-xs tabular-nums ${unallocH > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}`}>
-                {fmtH(unallocH)}
-              </span>
-            </div>
-          </div>
-
-          {/* Kept / Over / Fully remitted */}
-          {keptE !== null && (
-            <div className="flex items-center justify-between py-1 mt-0.5 border-t border-dashed border-gray-100">
-              {isFullyRemitted ? (
-                <>
-                  <span className="text-xs font-medium text-emerald-600">Fully remitted ✓</span>
-                  <span className="text-xs text-emerald-500 tabular-nums">—</span>
-                </>
-              ) : isOverRemitted ? (
-                <>
-                  <span className="text-xs font-semibold text-red-600">Over-remitted ⚠</span>
-                  <span className="text-xs font-semibold text-red-600 tabular-nums">{fmtTop(Math.abs(keptE))} over</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-medium text-indigo-600">Kept in {earningCurrency}</span>
-                  <span className="text-xs font-semibold text-indigo-700 tabular-nums">{fmtTop(keptE)}</span>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+      {/* Salary row */}
+      <div className="flex items-baseline gap-1 py-0.5">
+        <span className="font-mono text-gray-300 text-xs w-4 shrink-0 select-none"> </span>
+        <span className="text-xs font-semibold flex-1 text-gray-800">Salary</span>
+        <span className="text-xs tabular-nums font-bold text-gray-900 text-right">{fmtE(salaryE!)}</span>
+        <span className="text-xs tabular-nums text-gray-400 w-9 text-right shrink-0">100%</span>
       </div>
+
+      {/* Abroad expenses */}
+      {abroadE > 0 && (
+        <Row tree="├─" label="Abroad expenses" amount={`−${fmtE(abroadE)}`}
+          pct={pctStr(abroadE, salaryE!)} amtClass="text-orange-600" />
+      )}
+
+      {/* Remitted home */}
+      <Row
+        tree={isOverRemitted || isFullyRemitted || keptE === null || (keptE <= 0.01 && !isOverRemitted) ? '├─' : '├─'}
+        label="Remitted home"
+        amount={`−${fmtE(remittedE)}`}
+        pct={pctStr(remittedE, salaryE!)}
+        labelClass="text-gray-700 font-medium"
+        amtClass="text-emerald-700 font-semibold"
+      />
+
+      {/* Level-2: home currency breakdown */}
+      <div className="ml-4 space-y-0">
+        <Row tree="│ ├─" label="Invested" amount={fmtH(investedH)}
+          pct={pctStr(investedH, remittedH)} labelClass="text-gray-500" amtClass="text-gray-600" />
+        <Row tree="│ ├─" label="Home expenses" amount={fmtH(homeExpH)}
+          pct={pctStr(homeExpH, remittedH)} labelClass="text-gray-500" amtClass="text-gray-600" />
+        <Row
+          tree="│ └─"
+          label={unallocH > 0 ? 'Unallocated ⚠' : 'Unallocated'}
+          amount={fmtH(unallocH)}
+          pct={pctStr(unallocH, remittedH)}
+          labelClass={unallocH > 0 ? 'text-amber-600 font-medium' : 'text-gray-400'}
+          amtClass={unallocH > 0 ? 'text-amber-600 font-semibold' : 'text-gray-400'}
+        />
+      </div>
+
+      {/* Kept / Over / Fully remitted */}
+      {keptE !== null && (
+        isFullyRemitted ? (
+          <Row tree="└─" label="Fully remitted ✓" amount="—"
+            labelClass="text-emerald-600 font-medium" amtClass="text-emerald-500" />
+        ) : isOverRemitted ? (
+          <>
+            <Row tree="└─" label="Used from prev. savings" amount={`${fmtE(Math.abs(keptE))} over`}
+              pct={pctStr(Math.abs(keptE), salaryE!)} labelClass="text-red-600 font-semibold" amtClass="text-red-600 font-semibold" />
+          </>
+        ) : (
+          <Row tree="└─" label={`Kept in ${earningCurrency}`} amount={fmtE(keptE)}
+            pct={pctStr(keptE, salaryE!)} labelClass="text-indigo-600 font-medium" amtClass="text-indigo-700 font-semibold" />
+        )
+      )}
     </div>
   );
 }

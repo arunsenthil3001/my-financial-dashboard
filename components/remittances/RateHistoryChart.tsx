@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import type { RateHistoryPoint } from '@/lib/rateIntelligence';
 import type { RemittanceEntry } from '@/lib/types';
-import { formatAmount } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
 
 interface RateHistoryChartProps {
   history: RateHistoryPoint[];

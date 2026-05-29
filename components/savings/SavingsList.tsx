@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import type { SavingsEntry } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
 import { formatDate, daysUntil, addMonths } from '@/lib/utils';
-import { formatAmount, CURRENCIES } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
+import { CURRENCIES } from '@/lib/currencies';
 import { useCurrency } from '@/lib/currencyContext';
 import {
   parseFDMeta, fdMaturityDate,
@@ -214,8 +215,8 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
   return (
     <div className="space-y-3">
       {savings.map((s) => {
-        const isChitNew = s.type === 'Chit Funds' && s.chitMembers !== null;
-        // For chit entries, gain is already in currentValue - amountInvested
+        const isChitNew  = s.type === 'Chit Funds' && s.chitMembers !== null;
+        const isUpstox   = s.notes?.startsWith('Synced from Upstox') ?? false;
         const gain    = s.currentValue - s.amountInvested;
         const gainPct = s.amountInvested > 0 ? (gain / s.amountInvested) * 100 : 0;
         const positive = gain >= 0;
@@ -231,6 +232,11 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
                 <div className="flex items-center gap-2 flex-wrap mb-0.5">
                   <h3 className="font-semibold text-gray-900 text-sm truncate">{s.name}</h3>
                   <Badge color={color} label={s.type} />
+                  {isUpstox && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-600 text-xs font-medium border border-sky-200">
+                      ↻ Upstox
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-gray-400">Started {formatDate(s.startDate)}</p>
               </div>
@@ -248,6 +254,8 @@ export default function SavingsList({ savings, onEdit, onDelete }: Props) {
                       Cancel
                     </button>
                   </>
+                ) : isUpstox ? (
+                  <span className="text-xs text-gray-300 px-2 py-1">auto-synced</span>
                 ) : (
                   <>
                     <button onClick={() => onEdit(s)}

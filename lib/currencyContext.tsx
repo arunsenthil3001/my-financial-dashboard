@@ -10,7 +10,8 @@ import {
   useState,
 } from 'react';
 import { getLiveRate } from './forex';
-import { formatAmount, CURRENCIES } from './currencies';
+import { CURRENCIES } from './currencies';
+import { formatAmount } from './formatNumber';
 import { useSettings } from '@/hooks/useSettings';
 
 // ── Context shape ─────────────────────────────────────────────────────────────

@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react';
 import type { ExpenseEntry } from '@/lib/types';
 import { EXPENSE_CATEGORY_COLORS, EXPENSE_CATEGORY_ICONS } from '@/lib/types';
 import { formatShortDate } from '@/lib/utils';
-import { formatAmount, CURRENCIES } from '@/lib/currencies';
+import { CURRENCIES } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
 import { useCurrency } from '@/lib/currencyContext';
 import EmptyState from '@/components/ui/EmptyState';
 

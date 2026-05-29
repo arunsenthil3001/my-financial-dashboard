@@ -10,7 +10,8 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { formatAmount, CURRENCIES } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
+import { CURRENCIES } from '@/lib/currencies';
 
 interface DataPoint {
   month: string;

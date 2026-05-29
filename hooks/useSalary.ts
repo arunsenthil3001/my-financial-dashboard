@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getUserId } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toaster';
 import type { SalaryEntry } from '@/lib/types';
 import { todayISO } from '@/lib/utils';
@@ -72,6 +73,7 @@ export function useSalary() {
       }
 
       // Insert new
+      const userId = await getUserId();
       const { data, error } = await supabase
         .from('salary_history')
         .insert({
@@ -80,6 +82,7 @@ export function useSalary() {
           effective_from: input.effectiveFrom,
           effective_to: null,
           notes: input.notes,
+          user_id: userId,
         })
         .select()
         .single();

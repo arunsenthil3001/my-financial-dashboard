@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getUserId } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toaster';
 import type { ExpenseEntry, ExpenseCategory } from '@/lib/types';
 import { isToday, isThisWeek, isThisMonth, monthKey } from '@/lib/utils';
@@ -113,9 +114,10 @@ export function useExpenses() {
   // ── Insert (tries full multi-currency row; falls back to basic if columns missing) ──
   const add = useCallback(
     async (input: ExpenseInput): Promise<boolean> => {
+      const userId = await getUserId();
       let { data, error } = await supabase
         .from('expenses')
-        .insert(inputToFullRow(input))
+        .insert({ ...inputToFullRow(input), user_id: userId })
         .select()
         .single();
 
@@ -123,7 +125,7 @@ export function useExpenses() {
       if (error?.code === 'PGRST204') {
         ({ data, error } = await supabase
           .from('expenses')
-          .insert(inputToBasicRow(input))
+          .insert({ ...inputToBasicRow(input), user_id: userId })
           .select()
           .single());
       }

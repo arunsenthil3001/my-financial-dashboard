@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { fetchRateServer } from '@/lib/server/fetchRate';
+import { syncAllUsers } from '@/lib/upstoxSync';
 
 // Use the service-role client so this route isn't blocked by RLS
 const supabase = createClient(
@@ -56,6 +57,9 @@ export async function GET(req: NextRequest) {
     .from('user_settings')
     .update({ cached_rate: rate, rate_fetched_at: fetchedAt })
     .eq('id', id);
+
+  // ── Sync Upstox holdings for all connected users ──
+  await syncAllUsers().catch(() => { /* non-fatal — log only */ });
 
   return NextResponse.json({
     ok: true,

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useSettings } from '@/hooks/useSettings';
 import { useSalary, type SalaryInput } from '@/hooks/useSalary';
 import { useCurrency } from '@/lib/currencyContext';
@@ -8,6 +9,7 @@ import { CURRENCY_LIST, CURRENCIES, formatAmount } from '@/lib/currencies';
 import { formatDate, todayISO } from '@/lib/utils';
 import Modal from '@/components/ui/Modal';
 import { useRateIntelligence } from '@/hooks/useRateIntelligence';
+import { supabase } from '@/lib/supabase';
 
 // ── Guided switch modal ───────────────────────────────────────────────────────
 
@@ -155,6 +157,21 @@ export default function SettingsClient() {
   const [alertEnabled, setAlertEnabled]     = useState<boolean | null>(null);
   const [alertThreshold, setAlertThreshold] = useState<number | null>(null);
   const [savingAlert, setSavingAlert]       = useState(false);
+
+  // Upstox connection status
+  const [upstoxConnected, setUpstoxConnected] = useState(false);
+  const [upstoxLastSynced, setUpstoxLastSynced] = useState<string | null>(null);
+
+  const router = useRouter();
+
+  useEffect(() => {
+    supabase.from('upstox_tokens').select('updated_at').maybeSingle().then(({ data }) => {
+      if (data) {
+        setUpstoxConnected(true);
+        setUpstoxLastSynced((data as { updated_at: string }).updated_at ?? null);
+      }
+    });
+  }, []);
 
   const homeCurrency    = settings?.homeCurrency    ?? 'INR';
   const earningCurrency = settings?.earningCurrency ?? 'INR';
@@ -404,6 +421,47 @@ export default function SettingsClient() {
           )}
         </div>
       )}
+
+      {/* ── Connected Accounts ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm space-y-4">
+        <h2 className="text-sm font-semibold text-gray-700">Connected Accounts</h2>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Upstox</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {upstoxConnected
+                ? `Connected ✓${upstoxLastSynced ? ` · Last synced: ${new Date(upstoxLastSynced).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`
+                : 'Sync your stock holdings automatically'}
+            </p>
+          </div>
+          {upstoxConnected ? (
+            <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
+              Connected ✓
+            </span>
+          ) : (
+            <a
+              href="/api/auth/upstox"
+              className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              Connect Upstox
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* ── Sign Out ── */}
+      <button
+        onClick={async () => {
+          await supabase.auth.signOut();
+          router.push('/auth');
+        }}
+        className="w-full flex items-center justify-center gap-2 text-sm font-medium text-gray-500 hover:text-red-600 py-3 rounded-2xl border border-gray-100 bg-white shadow-sm hover:border-red-200 hover:bg-red-50 transition-colors"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+        Sign out
+      </button>
 
       {/* ── Guided earning currency switch modal ── */}
       <Modal open={switchModalOpen} onClose={closeSwitchModal} title="Switch Earning Currency">

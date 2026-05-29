@@ -1,7 +1,7 @@
 {
-  "name": "My Financial Dashboard",
-  "short_name": "FinDash",
-  "description": "Personal savings and expense tracker",
+  "name": "My Finance Partner",
+  "short_name": "FinPartner",
+  "description": "Personal finance tracker for expats",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f9fafb",

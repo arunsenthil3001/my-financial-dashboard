@@ -10,13 +10,13 @@ import PWAInstallBanner from "@/components/pwa/PWAInstallBanner";
 const inter = Inter({ subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
-  title: "My Financial Dashboard",
-  description: "Personal savings and expense tracker for salaried individuals",
+  title: "My Finance Partner",
+  description: "Personal finance tracker for expats",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "FinDash",
+    title: "FinPartner",
   },
   icons: {
     apple: "/icons/icon-192.png",

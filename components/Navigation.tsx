@@ -97,7 +97,7 @@ export default function Navigation() {
         <div className="max-w-5xl mx-auto w-full flex items-center justify-between px-6 h-14">
           <div className="flex items-center gap-2">
             <span className="text-xl">💰</span>
-            <span className="font-bold text-gray-900 tracking-tight">My Financial Dashboard</span>
+            <span className="font-bold text-gray-900 tracking-tight">My Finance Partner</span>
           </div>
           <nav className="flex items-center gap-1">
             {tabs.map(({ href, label }) => {
@@ -127,7 +127,7 @@ export default function Navigation() {
         <div className="flex items-center justify-between px-4 h-13 py-3">
           <div className="flex items-center gap-2">
             <span className="text-lg">💰</span>
-            <span className="font-bold text-gray-900 text-sm tracking-tight">My Financial Dashboard</span>
+            <span className="font-bold text-gray-900 text-sm tracking-tight">My Finance Partner</span>
           </div>
           <div className="flex items-center gap-2">
             <CurrencyToggle />

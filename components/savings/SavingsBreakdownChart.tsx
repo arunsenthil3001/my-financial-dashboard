@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import type { SavingsEntry, SavingsType } from '@/lib/types';
 import { SAVINGS_TYPE_COLORS } from '@/lib/types';
-import { formatAmount } from '@/lib/currencies';
+import { formatAmount } from '@/lib/formatNumber';
 import { useCurrency } from '@/lib/currencyContext';
 
 interface Props {
