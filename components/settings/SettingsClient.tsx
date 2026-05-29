@@ -160,6 +160,10 @@ export default function SettingsClient() {
   // Upstox connection status
   const [upstoxConnected, setUpstoxConnected] = useState(false);
   const [upstoxLastSynced, setUpstoxLastSynced] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncDone, setSyncDone] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     supabase.from('upstox_tokens').select('updated_at').is('user_id', null).maybeSingle().then(({ data }) => {
@@ -169,6 +173,28 @@ export default function SettingsClient() {
       }
     });
   }, []);
+
+  const handleUpstoxSync = async () => {
+    setSyncing(true);
+    setSyncDone(false);
+    const res = await fetch('/api/upstox/sync', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json() as { updated_at?: string };
+      if (data.updated_at) setUpstoxLastSynced(data.updated_at);
+      setSyncDone(true);
+    }
+    setSyncing(false);
+  };
+
+  const handleUpstoxDisconnect = async () => {
+    setDisconnecting(true);
+    await fetch('/api/upstox/disconnect', { method: 'POST' });
+    setUpstoxConnected(false);
+    setUpstoxLastSynced(null);
+    setConfirmDisconnect(false);
+    setSyncDone(false);
+    setDisconnecting(false);
+  };
 
   const homeCurrency    = settings?.homeCurrency    ?? 'INR';
   const earningCurrency = settings?.earningCurrency ?? 'INR';
@@ -420,30 +446,71 @@ export default function SettingsClient() {
       )}
 
       {/* ── Connected Accounts ── */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm space-y-4">
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm space-y-3">
         <h2 className="text-sm font-semibold text-gray-700">Connected Accounts</h2>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-gray-800">Upstox</p>
             <p className="text-xs text-gray-400 mt-0.5">
               {upstoxConnected
-                ? `Connected ✓${upstoxLastSynced ? ` · Last synced: ${new Date(upstoxLastSynced).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`
+                ? syncDone
+                  ? 'Connected ✓ · Synced just now'
+                  : `Connected ✓${upstoxLastSynced ? ` · Last synced: ${new Date(upstoxLastSynced).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`
                 : 'Sync your stock holdings automatically'}
             </p>
           </div>
           {upstoxConnected ? (
-            <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
-              Connected ✓
-            </span>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={handleUpstoxSync}
+                disabled={syncing}
+                className="flex items-center gap-1.5 text-xs border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                {syncing ? (
+                  <span className="w-3 h-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />
+                ) : (
+                  <span>↻</span>
+                )}
+                {syncing ? 'Syncing…' : 'Sync Now'}
+              </button>
+              <button
+                onClick={() => { setConfirmDisconnect(true); setSyncDone(false); }}
+                className="text-xs border border-red-200 text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+              >
+                Disconnect
+              </button>
+            </div>
           ) : (
             <a
               href="/api/auth/upstox"
-              className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors"
+              className="text-xs font-semibold bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition-colors shrink-0"
             >
               Connect Upstox
             </a>
           )}
         </div>
+        {confirmDisconnect && (
+          <div className="bg-red-50 border border-red-100 rounded-xl p-3 space-y-2">
+            <p className="text-xs text-red-700">
+              This will remove all Upstox-synced entries from your Savings. Continue?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmDisconnect(false)}
+                className="text-xs border border-gray-200 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpstoxDisconnect}
+                disabled={disconnecting}
+                className="text-xs bg-red-500 text-white px-3 py-1.5 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+              >
+                {disconnecting ? 'Disconnecting…' : 'Yes, disconnect'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Guided earning currency switch modal ── */}
