@@ -1,10 +1,6 @@
 /**
  * Server-side only — imported by API routes and the cron job.
  * Never import this in client components.
- *
- * Syncs equity holdings only. Upstox MF API (UDAPI100016) requires
- * MFs to be purchased through Upstox's own MF platform; third-party
- * MF holdings are not accessible via this API.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -71,11 +67,71 @@ async function syncStocks(userId: string | null, accessToken: string): Promise<v
   }
 }
 
+// ── Mutual Funds ──────────────────────────────────────────────────────────────
+
+interface UpstoxMFHolding {
+  fund: string;
+  quantity: number;
+  average_price: number;
+  last_price: number;
+  pnl: number;
+  folio: string;
+  instrument_key: string;
+}
+
+async function fetchMFHoldings(accessToken: string): Promise<UpstoxMFHolding[]> {
+  const res = await fetch('https://api.upstox.com/v2/mf/holdings', {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Upstox MF API error: ${res.status}`);
+  const json = await res.json() as { data: UpstoxMFHolding[] };
+  return json.data ?? [];
+}
+
+async function syncMutualFunds(userId: string | null, accessToken: string): Promise<void> {
+  const holdings = await fetchMFHoldings(accessToken);
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const h of holdings) {
+    const amountInvested = h.quantity * h.average_price;
+    const currentValue   = h.quantity * h.last_price;
+    const notes = `Synced from Upstox · ${h.quantity} units @ ₹${h.average_price.toFixed(4)}`;
+
+    const query = serviceClient
+      .from('savings')
+      .select('id')
+      .eq('name', h.fund)
+      .eq('type', 'Mutual Fund');
+
+    const { data: existing } = await (
+      userId ? query.eq('user_id', userId) : query.is('user_id', null)
+    ).maybeSingle();
+
+    if (existing) {
+      await serviceClient
+        .from('savings')
+        .update({ amount_invested: amountInvested, current_value: currentValue, notes })
+        .eq('id', existing.id);
+    } else {
+      await serviceClient.from('savings').insert({
+        user_id:         userId,
+        name:            h.fund,
+        type:            'Mutual Fund',
+        amount_invested: amountInvested,
+        current_value:   currentValue,
+        start_date:      today,
+        notes,
+      });
+    }
+  }
+}
+
 // ── Public entry points ───────────────────────────────────────────────────────
 
-/** Syncs stock holdings for a single token. Called from OAuth callback and cron. */
+/** Syncs stock and MF holdings for a single token. Called from OAuth callback and cron. */
 export async function syncHoldingsForUser(userId: string | null, accessToken: string): Promise<void> {
   await syncStocks(userId, accessToken);
+  await syncMutualFunds(userId, accessToken);
 
   await serviceClient
     .from('upstox_tokens')
