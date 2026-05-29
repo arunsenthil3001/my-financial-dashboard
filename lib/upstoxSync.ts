@@ -89,13 +89,15 @@ async function fetchMFHoldings(accessToken: string): Promise<UpstoxMFHolding[]> 
   const res = await fetch('https://api.upstox.com/v2/portfolio/mutual-funds', {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
+  console.log(`[Upstox] MF response status: ${res.status}`);
+  const rawBody = await res.text();
+  console.log('[Upstox] MF raw response body:', JSON.stringify(rawBody));
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    console.error(`[Upstox] MF holdings API error ${res.status}:`, body);
     throw new Error(`Upstox MF API error: ${res.status}`);
   }
-  const json = await res.json() as { data: UpstoxMFHolding[] };
-  console.log(`[Upstox] MF holdings fetched: ${json.data?.length ?? 0} funds`);
+  const json = JSON.parse(rawBody) as { data: UpstoxMFHolding[] };
+  const count = json.data?.length ?? 0;
+  console.log(`[Upstox] MF count: ${count}`);
   return json.data ?? [];
 }
 
