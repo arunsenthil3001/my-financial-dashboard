@@ -456,7 +456,7 @@ export default function SettingsClient() {
                 ? syncDone
                   ? 'Connected ✓ · Synced just now'
                   : `Connected ✓${upstoxLastSynced ? ` · Last synced: ${new Date(upstoxLastSynced).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`
-                : 'Sync your stock holdings automatically'}
+                : 'Auto-sync your equity holdings (stocks only)'}
             </p>
           </div>
           {upstoxConnected ? (
