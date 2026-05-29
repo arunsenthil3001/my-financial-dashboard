@@ -9,7 +9,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Upstox not configured' }, { status: 500 });
   }
 
-  // Generate random state and store in cookie for CSRF protection
   const state = crypto.randomBytes(16).toString('hex');
 
   const authUrl = new URL('https://api.upstox.com/v2/login/authorization/dialog');
@@ -19,7 +18,14 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set('state', state);
 
   const response = NextResponse.redirect(authUrl.toString());
-  response.cookies.set('upstox_state', state, { httpOnly: true, maxAge: 600, sameSite: 'lax' });
+  // secure + sameSite=none required so the cookie survives the cross-site redirect back
+  response.cookies.set('upstox_state', state, {
+    httpOnly: true,
+    maxAge: 600,
+    sameSite: 'none',
+    secure: true,
+    path: '/',
+  });
 
   return response;
 }
