@@ -16,7 +16,9 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('state', state);
-  authUrl.searchParams.set('scope', 'profile,holdings,mutual_funds');
+  // Upstox v2 valid scopes: profile, holdings — 'mutual_funds' is not a recognised scope
+  // and may cause Upstox to issue a restricted token
+  authUrl.searchParams.set('scope', 'profile,holdings');
 
   const response = NextResponse.redirect(authUrl.toString());
   // secure + sameSite=none required so the cookie survives the cross-site redirect back
