@@ -10,6 +10,8 @@ const serviceClient = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
+// ── Stocks ────────────────────────────────────────────────────────────────────
+
 interface UpstoxHolding {
   company_name: string;
   trading_symbol: string;
@@ -27,15 +29,15 @@ async function fetchHoldings(accessToken: string): Promise<UpstoxHolding[]> {
   return json.data ?? [];
 }
 
-export async function syncHoldingsForUser(userId: string | null, accessToken: string): Promise<void> {
+async function syncStocks(userId: string | null, accessToken: string): Promise<void> {
   const holdings = await fetchHoldings(accessToken);
+  const today = new Date().toISOString().split('T')[0];
 
   for (const h of holdings) {
     const amountInvested = h.quantity * h.average_price;
     const currentValue   = h.quantity * h.last_price;
     const notes = `Synced from Upstox · ${h.quantity} shares @ ₹${h.average_price.toFixed(2)}`;
 
-    // Find existing entry: match by name + type, scoped to this user (or null for no-auth mode)
     const query = serviceClient
       .from('savings')
       .select('id')
@@ -49,10 +51,9 @@ export async function syncHoldingsForUser(userId: string | null, accessToken: st
     if (existing) {
       await serviceClient
         .from('savings')
-        .update({ current_value: currentValue, notes })
+        .update({ amount_invested: amountInvested, current_value: currentValue, notes })
         .eq('id', existing.id);
     } else {
-      const today = new Date().toISOString().split('T')[0];
       await serviceClient.from('savings').insert({
         user_id:         userId,
         name:            h.company_name,
@@ -64,46 +65,83 @@ export async function syncHoldingsForUser(userId: string | null, accessToken: st
       });
     }
   }
+}
 
-  // Update last-synced timestamp
+// ── Mutual Funds ──────────────────────────────────────────────────────────────
+
+interface UpstoxMFHolding {
+  fund_name: string;
+  units: number;
+  average_cost_price: number;
+  last_price: number;
+  current_value: number;
+  pnl: number;
+}
+
+async function fetchMFHoldings(accessToken: string): Promise<UpstoxMFHolding[]> {
+  const res = await fetch('https://api.upstox.com/v2/portfolio/mutual-funds', {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Upstox MF API error: ${res.status}`);
+  const json = await res.json() as { data: UpstoxMFHolding[] };
+  return json.data ?? [];
+}
+
+async function syncMutualFunds(userId: string | null, accessToken: string): Promise<void> {
+  const holdings = await fetchMFHoldings(accessToken);
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const h of holdings) {
+    const amountInvested = h.units * h.average_cost_price;
+    const notes = `Synced from Upstox · ${h.units} units @ ₹${h.average_cost_price.toFixed(4)}`;
+
+    const query = serviceClient
+      .from('savings')
+      .select('id')
+      .eq('name', h.fund_name)
+      .eq('type', 'Mutual Funds');
+
+    const { data: existing } = await (
+      userId ? query.eq('user_id', userId) : query.is('user_id', null)
+    ).maybeSingle();
+
+    if (existing) {
+      await serviceClient
+        .from('savings')
+        .update({ amount_invested: amountInvested, current_value: h.current_value, notes })
+        .eq('id', existing.id);
+    } else {
+      await serviceClient.from('savings').insert({
+        user_id:         userId,
+        name:            h.fund_name,
+        type:            'Mutual Funds',
+        amount_invested: amountInvested,
+        current_value:   h.current_value,
+        start_date:      today,
+        notes,
+      });
+    }
+  }
+}
+
+// ── Public entry points ───────────────────────────────────────────────────────
+
+/** Syncs both stocks and MFs for a single token. Called from OAuth callback and cron. */
+export async function syncHoldingsForUser(userId: string | null, accessToken: string): Promise<void> {
+  await syncStocks(userId, accessToken);
+  await syncMutualFunds(userId, accessToken);
+
   await serviceClient
     .from('upstox_tokens')
     .update({ updated_at: new Date().toISOString() })
     .is('user_id', null);
 }
 
-async function refreshToken(
-  refreshTokenStr: string,
-): Promise<{ access_token: string; refresh_token: string; expires_at: string } | null> {
-  const clientId     = process.env.UPSTOX_CLIENT_ID;
-  const clientSecret = process.env.UPSTOX_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-
-  const res = await fetch('https://api.upstox.com/v2/login/authorization/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type:    'refresh_token',
-      refresh_token: refreshTokenStr,
-      client_id:     clientId,
-      client_secret: clientSecret,
-    }),
-  });
-
-  if (!res.ok) return null;
-  const json = await res.json() as { access_token: string; refresh_token?: string; expires_in: number };
-  return {
-    access_token:  json.access_token,
-    refresh_token: json.refresh_token ?? refreshTokenStr,
-    expires_at:    new Date(Date.now() + json.expires_in * 1000).toISOString(),
-  };
-}
-
-/** Called by the cron job — syncs holdings for all connected tokens. */
+/** Called by the cron job — syncs all connected tokens. */
 export async function syncAllUsers(): Promise<{ synced: number; failed: number }> {
   const { data: tokens } = await serviceClient
     .from('upstox_tokens')
-    .select('id, user_id, access_token, refresh_token, expires_at')
+    .select('id, user_id, access_token, expires_at')
     .not('access_token', 'is', null);
 
   if (!tokens?.length) return { synced: 0, failed: 0 };
@@ -113,7 +151,6 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
 
   for (const token of tokens) {
     try {
-      let accessToken = token.access_token as string;
       const expiresAt = new Date(token.expires_at as string);
 
       // Upstox v2 has no refresh tokens — if expired, mark disconnected and skip
@@ -126,7 +163,8 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
         continue;
       }
 
-      const userId = (token.user_id as string | null) ?? null;
+      const userId      = (token.user_id as string | null) ?? null;
+      const accessToken = token.access_token as string;
       await syncHoldingsForUser(userId, accessToken);
       synced++;
     } catch {
