@@ -21,11 +21,17 @@ interface UpstoxHolding {
 }
 
 async function fetchHoldings(accessToken: string): Promise<UpstoxHolding[]> {
+  console.log('[Upstox] Fetching stock holdings...');
   const res = await fetch('https://api.upstox.com/v2/portfolio/long-term-holdings', {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
-  if (!res.ok) throw new Error(`Upstox holdings API error: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`[Upstox] Stock holdings API error ${res.status}:`, body);
+    throw new Error(`Upstox holdings API error: ${res.status}`);
+  }
   const json = await res.json() as { data: UpstoxHolding[] };
+  console.log(`[Upstox] Stock holdings fetched: ${json.data?.length ?? 0} stocks`);
   return json.data ?? [];
 }
 
@@ -79,11 +85,17 @@ interface UpstoxMFHolding {
 }
 
 async function fetchMFHoldings(accessToken: string): Promise<UpstoxMFHolding[]> {
+  console.log('[Upstox] Fetching MF holdings...');
   const res = await fetch('https://api.upstox.com/v2/portfolio/mutual-funds', {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
   });
-  if (!res.ok) throw new Error(`Upstox MF API error: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`[Upstox] MF holdings API error ${res.status}:`, body);
+    throw new Error(`Upstox MF API error: ${res.status}`);
+  }
   const json = await res.json() as { data: UpstoxMFHolding[] };
+  console.log(`[Upstox] MF holdings fetched: ${json.data?.length ?? 0} funds`);
   return json.data ?? [];
 }
 
@@ -128,8 +140,9 @@ async function syncMutualFunds(userId: string | null, accessToken: string): Prom
 
 /** Syncs both stocks and MFs for a single token. Called from OAuth callback and cron. */
 export async function syncHoldingsForUser(userId: string | null, accessToken: string): Promise<void> {
-  await syncStocks(userId, accessToken);
-  await syncMutualFunds(userId, accessToken);
+  console.log(`[Upstox] Starting holdings sync for userId=${userId ?? 'null'}`);
+  await syncStocks(userId, accessToken).catch(err => console.error('[Upstox] syncStocks error:', err));
+  await syncMutualFunds(userId, accessToken).catch(err => console.error('[Upstox] syncMutualFunds error:', err));
 
   await serviceClient
     .from('upstox_tokens')

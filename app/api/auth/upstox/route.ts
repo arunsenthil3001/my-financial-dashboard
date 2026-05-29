@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('scope', 'profile,holdings,mutual_funds');
 
   const response = NextResponse.redirect(authUrl.toString());
   // secure + sameSite=none required so the cookie survives the cross-site redirect back
