@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import { createClient as createServerClient } from '@/lib/supabase/server';
 import { syncHoldingsForUser } from '@/lib/upstoxSync';
 import { NextResponse, type NextRequest } from 'next/server';
 
@@ -27,10 +26,10 @@ export async function GET(request: NextRequest) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       code,
-      client_id: clientId,
+      client_id:     clientId,
       client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code',
+      redirect_uri:  redirectUri,
+      grant_type:    'authorization_code',
     }),
   });
 
@@ -44,32 +43,27 @@ export async function GET(request: NextRequest) {
     expires_in: number;
   };
 
-  // Get authenticated user
-  const supabase = await createServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.redirect(new URL('/auth', request.url));
-  }
-
   const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
+  const now       = new Date().toISOString();
 
   const adminClient = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   );
 
-  // Upsert token
-  await adminClient.from('upstox_tokens').upsert({
-    user_id:       user.id,
+  // Single-user app: delete any existing token row and insert fresh
+  await adminClient.from('upstox_tokens').delete().is('user_id', null);
+  await adminClient.from('upstox_tokens').insert({
+    user_id:       null,
     access_token:  tokenData.access_token,
     refresh_token: tokenData.refresh_token ?? null,
     expires_at:    expiresAt,
-    updated_at:    new Date().toISOString(),
-  }, { onConflict: 'user_id' });
+    updated_at:    now,
+  });
 
-  // Trigger immediate sync (best-effort)
+  // Trigger immediate holdings sync (best-effort)
   try {
-    await syncHoldingsForUser(user.id, tokenData.access_token);
+    await syncHoldingsForUser(null, tokenData.access_token);
   } catch { /* non-fatal */ }
 
   const response = NextResponse.redirect(new URL('/savings?upstox=connected', request.url));

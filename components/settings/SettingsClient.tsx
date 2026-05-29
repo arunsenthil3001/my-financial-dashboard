@@ -162,7 +162,7 @@ export default function SettingsClient() {
   const [upstoxLastSynced, setUpstoxLastSynced] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.from('upstox_tokens').select('updated_at').maybeSingle().then(({ data }) => {
+    supabase.from('upstox_tokens').select('updated_at').is('user_id', null).maybeSingle().then(({ data }) => {
       if (data) {
         setUpstoxConnected(true);
         setUpstoxLastSynced((data as { updated_at: string }).updated_at ?? null);

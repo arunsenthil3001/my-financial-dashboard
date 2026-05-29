@@ -27,7 +27,7 @@ async function fetchHoldings(accessToken: string): Promise<UpstoxHolding[]> {
   return json.data ?? [];
 }
 
-export async function syncHoldingsForUser(userId: string, accessToken: string): Promise<void> {
+export async function syncHoldingsForUser(userId: string | null, accessToken: string): Promise<void> {
   const holdings = await fetchHoldings(accessToken);
 
   for (const h of holdings) {
@@ -35,13 +35,16 @@ export async function syncHoldingsForUser(userId: string, accessToken: string): 
     const currentValue   = h.quantity * h.last_price;
     const notes = `Synced from Upstox · ${h.quantity} shares @ ₹${h.average_price.toFixed(2)}`;
 
-    const { data: existing } = await serviceClient
+    // Find existing entry: match by name + type, scoped to this user (or null for no-auth mode)
+    const query = serviceClient
       .from('savings')
       .select('id')
-      .eq('user_id', userId)
       .eq('name', h.company_name)
-      .eq('type', 'Stocks')
-      .maybeSingle();
+      .eq('type', 'Stocks');
+
+    const { data: existing } = await (
+      userId ? query.eq('user_id', userId) : query.is('user_id', null)
+    ).maybeSingle();
 
     if (existing) {
       await serviceClient
@@ -66,7 +69,7 @@ export async function syncHoldingsForUser(userId: string, accessToken: string): 
   await serviceClient
     .from('upstox_tokens')
     .update({ updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
+    .is('user_id', null);
 }
 
 async function refreshToken(
@@ -96,7 +99,7 @@ async function refreshToken(
   };
 }
 
-/** Called by the cron job — syncs holdings for all connected users. */
+/** Called by the cron job — syncs holdings for all connected tokens. */
 export async function syncAllUsers(): Promise<{ synced: number; failed: number }> {
   const { data: tokens } = await serviceClient
     .from('upstox_tokens')
@@ -116,7 +119,6 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
       if (expiresAt <= new Date()) {
         const refreshed = await refreshToken(token.refresh_token as string);
         if (!refreshed) {
-          // Mark as disconnected
           await serviceClient
             .from('upstox_tokens')
             .update({ access_token: null })
@@ -132,7 +134,8 @@ export async function syncAllUsers(): Promise<{ synced: number; failed: number }
         }).eq('id', token.id);
       }
 
-      await syncHoldingsForUser(token.user_id as string, accessToken);
+      const userId = (token.user_id as string | null) ?? null;
+      await syncHoldingsForUser(userId, accessToken);
       synced++;
     } catch {
       failed++;
