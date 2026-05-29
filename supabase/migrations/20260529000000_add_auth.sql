@@ -25,33 +25,34 @@ DROP POLICY IF EXISTS allow_all_user_settings  ON user_settings;
 DROP POLICY IF EXISTS allow_all_chit_cycles    ON chit_cycles;
 DROP POLICY IF EXISTS allow_all_rate_snapshots ON rate_snapshots;
 
--- Transitional policies: own rows + unclaimed (user_id IS NULL) rows are visible
--- After data is claimed, only user's own rows remain visible.
+-- Transitional policies: own rows + unclaimed (user_id IS NULL) rows are visible/editable.
+-- WITH CHECK allows NULL so updates to unclaimed rows don't fail before data is claimed.
+-- Once data is claimed (user_id set), rows are locked to that user.
 
 CREATE POLICY user_expenses ON expenses FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_savings ON savings FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_remittances ON remittances FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_salary_history ON salary_history FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_settings ON user_settings FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_chit_cycles ON chit_cycles FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
 
 CREATE POLICY user_rate_snapshots ON rate_snapshots FOR ALL
-  USING (user_id = auth.uid() OR user_id IS NULL)
-  WITH CHECK (user_id = auth.uid());
+  USING    (user_id = auth.uid() OR user_id IS NULL)
+  WITH CHECK (user_id = auth.uid() OR user_id IS NULL);
