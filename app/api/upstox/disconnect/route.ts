@@ -1,21 +1,19 @@
-import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { deleteTokens } from '@/lib/upstox/client';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+);
 
 export async function POST() {
-  const adminClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  );
-
-  await adminClient
+  await supabase
     .from('savings')
     .delete()
     .like('notes', 'Synced from Upstox%');
 
-  await adminClient
-    .from('upstox_tokens')
-    .delete()
-    .is('user_id', null);
+  await deleteTokens();
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ success: true });
 }

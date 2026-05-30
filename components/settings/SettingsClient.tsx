@@ -161,7 +161,7 @@ export default function SettingsClient() {
   const [upstoxConnected, setUpstoxConnected] = useState(false);
   const [upstoxLastSynced, setUpstoxLastSynced] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [syncDone, setSyncDone] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ stocks: number; mf: number } | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
@@ -176,16 +176,22 @@ export default function SettingsClient() {
 
   const handleUpstoxSync = async () => {
     setSyncing(true);
-    setSyncDone(false);
+    setSyncResult(null);
     const res = await fetch('/api/upstox/sync', { method: 'POST' });
     if (res.status === 401) {
-      // Token expired and could not be refreshed — reset to disconnected
       setUpstoxConnected(false);
       setUpstoxLastSynced(null);
     } else if (res.ok) {
-      const data = await res.json() as { updated_at?: string };
-      if (data.updated_at) setUpstoxLastSynced(data.updated_at);
-      setSyncDone(true);
+      const data = await res.json() as {
+        stocks?:      { synced: number };
+        mutualFunds?: { synced: number };
+        updated_at?:  string;
+      };
+      setSyncResult({
+        stocks: data.stocks?.synced      ?? 0,
+        mf:     data.mutualFunds?.synced ?? 0,
+      });
+      setUpstoxLastSynced(new Date().toISOString());
     }
     setSyncing(false);
   };
@@ -196,7 +202,7 @@ export default function SettingsClient() {
     setUpstoxConnected(false);
     setUpstoxLastSynced(null);
     setConfirmDisconnect(false);
-    setSyncDone(false);
+    setSyncResult(null);
     setDisconnecting(false);
   };
 
@@ -457,10 +463,10 @@ export default function SettingsClient() {
             <p className="text-sm font-medium text-gray-800">Upstox</p>
             <p className="text-xs text-gray-400 mt-0.5">
               {upstoxConnected
-                ? syncDone
-                  ? 'Connected ✓ · Synced just now'
+                ? syncResult
+                  ? `Connected ✓ · Synced ${syncResult.stocks} stocks, ${syncResult.mf} MFs`
                   : `Connected ✓${upstoxLastSynced ? ` · Last synced: ${new Date(upstoxLastSynced).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`
-                : 'Auto-sync your equity holdings (stocks only)'}
+                : 'Auto-sync your equity and mutual fund holdings'}
             </p>
           </div>
           {upstoxConnected ? (
@@ -478,7 +484,7 @@ export default function SettingsClient() {
                 {syncing ? 'Syncing…' : 'Sync Now'}
               </button>
               <button
-                onClick={() => { setConfirmDisconnect(true); setSyncDone(false); }}
+                onClick={() => { setConfirmDisconnect(true); setSyncResult(null); }}
                 className="text-xs border border-red-200 text-red-600 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
               >
                 Disconnect

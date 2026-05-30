@@ -1,34 +1,21 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import crypto from 'crypto';
+import { NextResponse } from 'next/server';
 
-export async function GET(request: NextRequest) {
-  const clientId    = process.env.UPSTOX_CLIENT_ID;
+export async function GET() {
+  const clientId   = process.env.UPSTOX_CLIENT_ID;
   const redirectUri = process.env.UPSTOX_REDIRECT_URI;
 
   if (!clientId || !redirectUri) {
     return NextResponse.json({ error: 'Upstox not configured' }, { status: 500 });
   }
 
-  const state = crypto.randomBytes(16).toString('hex');
-
-  const authUrl = new URL('https://api.upstox.com/v2/login/authorization/dialog');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('state', state);
-  // Upstox v2 valid scopes: profile, holdings — 'mutual_funds' is not a recognised scope
-  // and may cause Upstox to issue a restricted token
-  authUrl.searchParams.set('scope', 'profile,holdings');
-
-  const response = NextResponse.redirect(authUrl.toString());
-  // secure + sameSite=none required so the cookie survives the cross-site redirect back
-  response.cookies.set('upstox_state', state, {
-    httpOnly: true,
-    maxAge: 600,
-    sameSite: 'none',
-    secure: true,
-    path: '/',
+  const params = new URLSearchParams({
+    client_id:     clientId,
+    redirect_uri:  redirectUri,
+    response_type: 'code',
+    scope:         'profile,holdings',
   });
 
-  return response;
+  return NextResponse.redirect(
+    `https://api.upstox.com/v2/login/authorization/dialog?${params}`,
+  );
 }
