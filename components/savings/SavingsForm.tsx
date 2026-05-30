@@ -609,6 +609,7 @@ export default function SavingsForm({
 
   const handleSubmit = (ev: React.FormEvent) => {
     ev.preventDefault();
+    console.log('[SavingsForm DEBUG] handleSubmit fired, step:', chitStep, 'type:', type);
     setErrors({});
 
     // Chit steps 1/2: Enter key in a field should advance the wizard, never submit
@@ -739,6 +740,15 @@ export default function SavingsForm({
     ? ['Fund Basics', 'Past Cycles', 'Summary']
     : ['Fund Basics', 'Summary'];
   const stepBarIndex = hasHistoryToEnter ? chitStep : (chitStep === 3 ? 2 : 1);
+
+  // ─── DEBUG ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (chitStep === 3) {
+      console.log('[SavingsForm DEBUG] chitStep became 3 at', new Date().toISOString());
+      // eslint-disable-next-line no-alert
+      alert('Summary rendered');
+    }
+  }, [chitStep]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
