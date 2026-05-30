@@ -41,10 +41,7 @@ export default function SavingsClient() {
     setModalOpen(true);
   };
 
-  const closeModal = () => {
-    console.log('[SavingsClient DEBUG] closeModal called\n' + new Error().stack);
-    setModalOpen(false); setEditing(null); setEditingCycles([]);
-  };
+  const closeModal = () => { setModalOpen(false); setEditing(null); setEditingCycles([]); };
 
   const tabCounts: Record<TabKey, number> = {
     All:            savings.length,
@@ -73,7 +70,6 @@ export default function SavingsClient() {
 
   // ── Standard submit (FD, MF, Generic) ──
   const handleSubmit = async (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
-    console.log('[SavingsClient DEBUG] handleSubmit (non-chit) called', data.type);
     setSubmitting(true);
     if (editing) {
       const ok = await update(editing.id, data);
@@ -90,7 +86,6 @@ export default function SavingsClient() {
     data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>,
     cycles: ChitCycleInput[],
   ) => {
-    console.log('[SavingsClient DEBUG] handleChitSubmit called, cycles:', cycles.length);
     setSubmitting(true);
     if (editing) {
       const ok = await update(editing.id, data);

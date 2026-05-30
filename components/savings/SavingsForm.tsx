@@ -609,14 +609,7 @@ export default function SavingsForm({
 
   const handleSubmit = (ev: React.FormEvent) => {
     ev.preventDefault();
-    console.log('[SavingsForm DEBUG] handleSubmit fired, step:', chitStep, 'type:', type);
     setErrors({});
-
-    // Chit steps 1/2: Enter key in a field should advance the wizard, never submit
-    if (type === 'Chit Funds' && chitStep < 3) {
-      chitNext();
-      return;
-    }
 
     if (type === 'FD') {
       if (!validateFD()) return;
@@ -740,15 +733,6 @@ export default function SavingsForm({
     ? ['Fund Basics', 'Past Cycles', 'Summary']
     : ['Fund Basics', 'Summary'];
   const stepBarIndex = hasHistoryToEnter ? chitStep : (chitStep === 3 ? 2 : 1);
-
-  // ─── DEBUG ───────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (chitStep === 3) {
-      console.log('[SavingsForm DEBUG] chitStep became 3 at', new Date().toISOString());
-      // eslint-disable-next-line no-alert
-      alert('Summary rendered');
-    }
-  }, [chitStep]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // RENDER
@@ -1334,12 +1318,12 @@ export default function SavingsForm({
         )}
 
         {isChit && chitStep < 3 ? (
-          <button type="button" onClick={chitNext}
+          <button key="chit-next" type="button" onClick={chitNext}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">
             Next →
           </button>
         ) : (
-          <button type="submit" disabled={submitting}
+          <button key="chit-save" type="submit" disabled={submitting}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white
               hover:bg-indigo-700 active:bg-indigo-800 transition-colors
               disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
