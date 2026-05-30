@@ -101,6 +101,15 @@ function isDatePast(dateStr: string): boolean {
   return d <= today;
 }
 
+function isWithinCascadeWindow(dateStr: string): boolean {
+  const d = new Date(dateStr);
+  d.setHours(0, 0, 0, 0);
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() + 30);
+  return d <= cutoff;
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function SavingsForm({
@@ -261,7 +270,7 @@ export default function SavingsForm({
     if (!fromCycleDate || bf <= 0) return null;
     const nextNum    = fromCycleNumber + 1;
     const nextSched  = addMonths(fromCycleDate, bf);
-    if (!isDatePast(nextSched)) return null;
+    if (!isWithinCascadeWindow(nextSched)) return null;
     return {
       cycleNumber:           nextNum,
       scheduledDate:         nextSched,
@@ -491,10 +500,15 @@ export default function SavingsForm({
       : null;
     const projectedGain = projectedBid !== null ? projectedBid - totalCommitted : null;
 
-    // Next bid = last confirmed actualDate + bidFrequency months
+    // Next bid date: unconfirmed pending cycle (within 30-day window) takes precedence
     const lastConfirmed = confirmedCycles[confirmedCycles.length - 1];
     const lastBidDate   = lastConfirmed?.cycleDate ?? null;
-    const nextBidDate   = bf > 0 && lastBidDate ? addMonths(lastBidDate, bf) : '';
+    const pendingCycle  = chitPastCycles
+      .filter(c => c.cycleNumber > 1 && !c.confirmed)
+      .sort((a, b) => a.cycleNumber - b.cycleNumber)[0] ?? null;
+    const nextBidDate   = pendingCycle
+      ? pendingCycle.scheduledDate
+      : bf > 0 && lastBidDate ? addMonths(lastBidDate, bf) : '';
     const daysLeft      = nextBidDate ? daysUntil(nextBidDate) : null;
 
     return {
@@ -504,7 +518,7 @@ export default function SavingsForm({
       remainingCycles, totalCycles, cyclesCompleted,
       nextBidDate, daysLeft, lastBidDate,
     };
-  }, [confirmedCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal, chitIsForeman]);
+  }, [confirmedCycles, chitFaceValue, chitMembers, chitDuration, chitBidFreqVal, chitIsForeman, chitPastCycles]);
 
   // ── MF derived values ─────────────────────────────────────────────────────
 
@@ -596,6 +610,12 @@ export default function SavingsForm({
   const handleSubmit = (ev: React.FormEvent) => {
     ev.preventDefault();
     setErrors({});
+
+    // Chit steps 1/2: Enter key in a field should advance the wizard, never submit
+    if (type === 'Chit Funds' && chitStep < 3) {
+      chitNext();
+      return;
+    }
 
     if (type === 'FD') {
       if (!validateFD()) return;

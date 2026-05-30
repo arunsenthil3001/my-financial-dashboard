@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { SavingsEntry, ChitCycle, ChitCycleInput } from '@/lib/types';
 import { useSavings } from '@/hooks/useSavings';
 import { useChitCycles } from '@/hooks/useChitCycles';
@@ -11,6 +11,9 @@ import Modal from '@/components/ui/Modal';
 import SavingsForm from './SavingsForm';
 import SavingsList from './SavingsList';
 import SavingsBreakdownChart from './SavingsBreakdownChart';
+
+type TabKey = 'All' | 'FD' | 'Mutual Funds' | 'Stocks' | 'Chit Funds';
+const TYPED_TABS: TabKey[] = ['FD', 'Mutual Funds', 'Stocks', 'Chit Funds'];
 
 export default function SavingsClient() {
   const { savings, loading, add, update, remove, totalInvested, totalCurrent, totalGain, gainPct } =
@@ -23,6 +26,7 @@ export default function SavingsClient() {
   const [editing, setEditing]       = useState<SavingsEntry | null>(null);
   const [editingCycles, setEditingCycles] = useState<ChitCycle[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [activeTab, setActiveTab]   = useState<TabKey>('All');
 
   const openAdd = () => { setEditing(null); setEditingCycles([]); setModalOpen(true); };
 
@@ -38,6 +42,31 @@ export default function SavingsClient() {
   };
 
   const closeModal = () => { setModalOpen(false); setEditing(null); setEditingCycles([]); };
+
+  const tabCounts: Record<TabKey, number> = {
+    All:            savings.length,
+    FD:             savings.filter(s => s.type === 'FD').length,
+    'Mutual Funds': savings.filter(s => s.type === 'Mutual Funds').length,
+    Stocks:         savings.filter(s => s.type === 'Stocks').length,
+    'Chit Funds':   savings.filter(s => s.type === 'Chit Funds').length,
+  };
+  const visibleTabs: TabKey[] = ['All', ...TYPED_TABS.filter(t => tabCounts[t] > 0)];
+
+  useEffect(() => {
+    if (tabCounts[activeTab] === 0 && activeTab !== 'All') setActiveTab('All');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabCounts[activeTab], activeTab]);
+
+  const filteredSavings = (() => {
+    const base = activeTab === 'All' ? savings : savings.filter(s => s.type === activeTab);
+    const gainPct = (s: SavingsEntry) =>
+      s.amountInvested > 0 ? (s.currentValue - s.amountInvested) / s.amountInvested : 0;
+    if (activeTab === 'FD')           return [...base].sort((a, b) => b.amountInvested - a.amountInvested);
+    if (activeTab === 'Mutual Funds') return [...base].sort((a, b) => gainPct(b) - gainPct(a));
+    if (activeTab === 'Stocks')       return [...base].sort((a, b) => gainPct(b) - gainPct(a));
+    if (activeTab === 'Chit Funds')   return [...base].sort((a, b) => b.startDate.localeCompare(a.startDate));
+    return base;
+  })();
 
   // ── Standard submit (FD, MF, Generic) ──
   const handleSubmit = async (data: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -114,9 +143,7 @@ export default function SavingsClient() {
 
       {/* ── List header ── */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-700">
-          All Savings <span className="text-gray-400 font-normal">({savings.length})</span>
-        </h2>
+        <h2 className="text-sm font-semibold text-gray-700">Savings</h2>
         <button
           onClick={openAdd}
           className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors"
@@ -128,8 +155,35 @@ export default function SavingsClient() {
         </button>
       </div>
 
+      {/* ── Tabs ── */}
+      {visibleTabs.length > 1 && (
+        <div className="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex gap-2 min-w-max sm:min-w-0 pb-0.5">
+            {visibleTabs.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                  activeTab === tab
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {tab}
+                <span className={`min-w-[1.1rem] text-center px-1 rounded-full text-xs font-bold ${
+                  activeTab === tab ? 'bg-indigo-500 text-white' : 'bg-gray-200 text-gray-500'
+                }`}>
+                  {tabCounts[tab]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Savings list ── */}
-      <SavingsList savings={savings} onEdit={openEdit} onDelete={remove} />
+      <SavingsList savings={filteredSavings} onEdit={openEdit} onDelete={remove} />
 
       {/* ── Modal ── */}
       <Modal
