@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useSettings } from '@/hooks/useSettings';
 import { useSalary, type SalaryInput } from '@/hooks/useSalary';
 import { useCurrency } from '@/lib/currencyContext';
@@ -142,11 +143,36 @@ function SalaryForm({ defaultCurrency, onSubmit, onCancel, submitting }: SalaryF
 
 // ── Main Settings client ──────────────────────────────────────────────────────
 
+interface AuthUser {
+  email: string;
+  avatarUrl: string | null;
+}
+
 export default function SettingsClient() {
+  const router = useRouter();
   const { settings, loading: settingsLoading, update: updateSettings } = useSettings();
   const { salary, current: currentSalary, loading: salaryLoading, closeCurrentAndAdd, remove: removeSalary } = useSalary();
   const { liveRate, earningCurrency: ctxEarning, homeCurrency: ctxHome, switchModalOpen, openSwitchModal, closeSwitchModal } = useCurrency();
   const { rateContext } = useRateIntelligence();
+
+  // Signed-in user
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setAuthUser({
+          email:     user.email ?? '',
+          avatarUrl: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+        });
+      }
+    });
+  }, []);
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.push('/auth');
+  };
 
   const [salaryModalOpen, setSalaryModalOpen]   = useState(false);
   const [submittingSalary, setSubmittingSalary] = useState(false);
@@ -234,6 +260,32 @@ export default function SettingsClient() {
 
   return (
     <div className="space-y-6">
+      {/* ── User profile ── */}
+      {authUser && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center gap-3">
+            {authUser.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={authUser.avatarUrl}
+                alt="Profile"
+                width={40}
+                height={40}
+                className="w-10 h-10 rounded-full border border-gray-100"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm">
+                {authUser.email.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{authUser.email}</p>
+              <p className="text-xs text-gray-400">Signed in with Google</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Currency settings ── */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
         <h2 className="text-sm font-semibold text-gray-700">Currency Settings</h2>
@@ -522,6 +574,18 @@ export default function SettingsClient() {
           </div>
         )}
       </div>
+
+      {/* ── Sign out ── */}
+      {authUser && (
+        <div className="flex justify-center pb-2">
+          <button
+            onClick={handleSignOut}
+            className="text-xs text-gray-400 hover:text-red-500 transition-colors underline underline-offset-2"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
 
       {/* ── Guided earning currency switch modal ── */}
       <Modal open={switchModalOpen} onClose={closeSwitchModal} title="Switch Earning Currency">

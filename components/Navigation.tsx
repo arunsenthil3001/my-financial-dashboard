@@ -90,6 +90,9 @@ function GearLink() {
 export default function Navigation() {
   const pathname = usePathname();
 
+  // Auth page is full-screen — no nav chrome
+  if (pathname === '/auth') return null;
+
   return (
     <>
       {/* ── Desktop top bar ── */}
