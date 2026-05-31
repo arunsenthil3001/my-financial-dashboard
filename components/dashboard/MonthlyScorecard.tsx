@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { isThisMonth } from '@/lib/utils';
 import { formatAmount } from '@/lib/formatNumber';
 import type { ExpenseEntry, RemittanceEntry, SalaryEntry, SavingsEntry } from '@/lib/types';
 
@@ -46,16 +45,24 @@ export default function MonthlyScorecard({
   homeCurrency, earningCurrency, liveRate,
 }: Props) {
   const [showEarning, setShowEarning] = useState(true);
+  const [viewDate, setViewDate] = useState(() => {
+    const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d;
+  });
   const sameC = earningCurrency === homeCurrency;
-  const monthLabel = new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const isCurrentMonth = (() => { const n = new Date(); return viewDate.getFullYear() === n.getFullYear() && viewDate.getMonth() === n.getMonth(); })();
+  const monthLabel = viewDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const prevMonth = () => setViewDate(d => { const n = new Date(d); n.setMonth(n.getMonth() - 1); return n; });
+  const nextMonth = () => { if (!isCurrentMonth) setViewDate(d => { const n = new Date(d); n.setMonth(n.getMonth() + 1); return n; }); };
 
   const sc = useMemo(() => {
+    const vy = viewDate.getFullYear(), vm = viewDate.getMonth();
+    const inView = (s: string) => { const [y, m] = s.split('-').map(Number); return y === vy && m - 1 === vm; };
     const thisMonthRemittances = remittances.filter(
-      r => isThisMonth(r.transferDate) &&
+      r => inView(r.transferDate) &&
            r.fromCurrency === earningCurrency &&
            r.toCurrency === homeCurrency,
     );
-    const thisMonthExp = expenses.filter(e => isThisMonth(e.date));
+    const thisMonthExp = expenses.filter(e => inView(e.date));
 
     const abroadE = thisMonthExp
       .filter(e => e.currency === earningCurrency)
@@ -79,7 +86,7 @@ export default function MonthlyScorecard({
     const keptE    = salaryE !== null ? salaryE - abroadE - remittedE : null;
 
     return { abroadE, remittedE, remittedH, investedH, homeExpH, unallocH, salaryE, keptE };
-  }, [salary, expenses, remittances, savings, homeCurrency, earningCurrency]);
+  }, [salary, expenses, remittances, savings, homeCurrency, earningCurrency, viewDate]);
 
   // ─── State 1: No salary ──────────────────────────────────────────────────────
   if (!salary) {
@@ -113,7 +120,12 @@ export default function MonthlyScorecard({
       <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
-          <span className="text-xs text-gray-400">{monthLabel}</span>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={prevMonth} className="text-gray-400 hover:text-gray-600 transition-colors text-sm px-1">←</button>
+            <span className="text-xs text-gray-500 font-medium min-w-[5.5rem] text-center">{monthLabel}</span>
+            <button type="button" onClick={nextMonth} disabled={isCurrentMonth}
+              className={`text-sm px-1 transition-colors ${isCurrentMonth ? 'text-gray-200 cursor-default' : 'text-gray-400 hover:text-gray-600'}`}>→</button>
+          </div>
         </div>
         <div className="flex items-baseline gap-1 py-0.5">
           <span className="font-mono text-gray-300 text-xs w-4 shrink-0 select-none"> </span>
@@ -141,8 +153,11 @@ export default function MonthlyScorecard({
       {/* Header */}
       <div className="flex items-center justify-between mb-1">
         <h2 className="text-sm font-semibold text-gray-700">Monthly Scorecard</h2>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">{monthLabel}</span>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={prevMonth} className="text-gray-400 hover:text-gray-600 transition-colors text-sm px-1">←</button>
+          <span className="text-xs text-gray-500 font-medium min-w-[5.5rem] text-center">{monthLabel}</span>
+          <button type="button" onClick={nextMonth} disabled={isCurrentMonth}
+            className={`text-sm px-1 transition-colors ${isCurrentMonth ? 'text-gray-200 cursor-default' : 'text-gray-400 hover:text-gray-600'}`}>→</button>
           {!sameC && (
             <button
               onClick={() => setShowEarning(v => !v)}
@@ -205,8 +220,15 @@ export default function MonthlyScorecard({
               pct={pctStr(Math.abs(keptE), salaryE!)} labelClass="text-red-600 font-semibold" amtClass="text-red-600 font-semibold" />
           </>
         ) : (
-          <Row tree="└─" label={`Kept in ${earningCurrency}`} amount={fmtE(keptE)}
-            pct={pctStr(keptE, salaryE!)} labelClass="text-indigo-600 font-medium" amtClass="text-indigo-700 font-semibold" />
+          <div className="flex items-start gap-1 py-0.5">
+            <span className="font-mono text-gray-300 text-xs w-4 shrink-0 select-none mt-0.5">└─</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-indigo-600 font-medium">Available abroad</p>
+              <p className="text-xs text-gray-400 leading-tight mt-0.5">Covers your expenses until next salary</p>
+            </div>
+            <span className="text-xs tabular-nums font-semibold text-indigo-700 text-right">{fmtE(keptE)}</span>
+            <span className="text-xs tabular-nums text-gray-400 w-9 text-right shrink-0">{pctStr(keptE, salaryE!)}</span>
+          </div>
         )
       )}
     </div>

@@ -708,6 +708,62 @@ export default function SavingsForm({
     }
   };
 
+  // ── Chit-specific save (type="button" click only — never via form submit) ──
+
+  const handleChitSave = () => {
+    setErrors({});
+    if (!validateChitStep1()) return;
+    if (confirmedCycles.length > 1 && !validateChitStep2()) return;
+
+    const fv = Number(chitFaceValue);
+    const n  = Number(chitMembers);
+    const bf = chitBidFreqVal;
+
+    const cycles: ChitCycleInput[] = confirmedCycles.map((c) => {
+      const isFirst    = c.cycleNumber === 1;
+      const amtPaid    = Number(c.amountPaid) || 0;
+      const eligible   = Math.max(0, n - c.cycleNumber);
+      const commPerMem = isFirst ? 0 : Math.max(0, fv - amtPaid);
+      const totalComm  = commPerMem * eligible;
+      return {
+        cycleNumber:        c.cycleNumber,
+        amountPaid:         amtPaid,
+        commissionReceived: commPerMem,
+        totalCommission:    totalComm,
+        userWon:            c.userWon,
+        bidAmountReceived:  c.userWon ? (Number(c.bidAmountReceived) || null) : null,
+        cycleDate:          c.cycleDate || null,
+      };
+    });
+
+    const totalPaid    = cycles.reduce((s, c) => s + c.amountPaid, 0);
+    const wonCycle     = cycles.find((c) => c.userWon);
+    const bidReceived  = chitIsForeman ? (n * fv) : (wonCycle?.bidAmountReceived ?? 0);
+    const hasWon       = chitIsForeman || !!wonCycle;
+    const currentValue = hasWon ? bidReceived : totalPaid;
+
+    const savingsData: Omit<SavingsEntry, 'id' | 'createdAt' | 'updatedAt'> = {
+      name: name.trim(), type, startDate,
+      amountInvested: totalPaid,
+      currentValue,
+      notes: '',
+      chitMembers: n,
+      chitFaceValue: fv,
+      chitDurationMonths: Number(chitDuration),
+      chitBidFrequency: bf,
+      chitWonCycle: wonCycle?.cycleNumber ?? (chitIsForeman ? 1 : null),
+      chitBidReceived: bidReceived > 0 ? bidReceived : null,
+      chitIsForeman,
+      remittanceId: remittanceId || null,
+    };
+
+    if (onChitSubmit) {
+      onChitSubmit(savingsData, cycles);
+    } else {
+      onSubmit(savingsData);
+    }
+  };
+
   // ── Chit step nav ─────────────────────────────────────────────────────────
 
   // Has at least one non-cycle-1 confirmed cycle or a pending unconfirmed cycle to enter?
@@ -1318,12 +1374,15 @@ export default function SavingsForm({
         )}
 
         {isChit && chitStep < 3 ? (
-          <button key="chit-next" type="button" onClick={chitNext}
+          <button type="button" onClick={chitNext}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors">
             Next →
           </button>
         ) : (
-          <button key="chit-save" type="submit" disabled={submitting}
+          <button
+            type={isChit ? 'button' : 'submit'}
+            onClick={isChit ? handleChitSave : undefined}
+            disabled={submitting}
             className="flex-1 rounded-xl bg-indigo-600 py-2.5 text-sm font-semibold text-white
               hover:bg-indigo-700 active:bg-indigo-800 transition-colors
               disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
