@@ -38,6 +38,13 @@ export async function middleware(request: NextRequest) {
   // if needed. Do not replace with getSession() — it doesn't re-validate.
   const { data: { user } } = await supabase.auth.getUser();
 
+  // Single-user guard: sign out and redirect any authenticated user who isn't the owner
+  const ALLOWED_USER_ID = '6cdebe54-dc18-492e-b244-c719382d534d';
+  if (user && user.id !== ALLOWED_USER_ID) {
+    await supabase.auth.signOut();
+    return NextResponse.redirect(new URL('/auth', request.url));
+  }
+
   // Authenticated user visiting /auth → send to dashboard
   if (user && PUBLIC_PATHS.has(pathname)) {
     return NextResponse.redirect(new URL('/', request.url));
