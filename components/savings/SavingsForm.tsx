@@ -194,12 +194,20 @@ export default function SavingsForm({
         const n   = initial.chitMembers ?? 0;
         const isF = initial.chitIsForeman ?? false;
         // Pre-populate all DB cycles as confirmed
+        const pool = n * fv;
         setChitPastCycles(
           initialCycles.map((c, idx) => {
             const scheduled = bf > 0 ? addMonths(initial.startDate, (c.cycleNumber - 1) * bf) : initial.startDate;
             const isFirst   = c.cycleNumber === 1;
             const wonCycle  = initialCycles.find(x => x.userWon);
             const isPostWin = !isFirst && !!wonCycle && c.cycleNumber > wonCycle.cycleNumber;
+            const amtPaid = Number(c.amountPaid);
+            const commPerMember = fv > 0 && amtPaid > 0 ? Math.max(0, fv - amtPaid) : 0;
+            const eligibleCount = Math.max(0, n - c.cycleNumber);
+            const impliedBidAmount =
+              !isFirst && !c.userWon && amtPaid > 0 && pool > 0
+                ? pool - commPerMember * eligibleCount
+                : null;
             return {
               cycleNumber:           c.cycleNumber,
               scheduledDate:         scheduled,
@@ -208,8 +216,8 @@ export default function SavingsForm({
               cycleDate:             c.cycleDate ?? scheduled,
               userWon:               c.userWon,
               bidAmountReceived:     c.bidAmountReceived !== null ? String(c.bidAmountReceived) : '',
-              impliedBidAmount:      null,
-              commissionDistributed: null,
+              impliedBidAmount,
+              commissionDistributed: commPerMember * eligibleCount,
               isLocked:              isFirst || isPostWin,
             };
           }),
